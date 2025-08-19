@@ -4,7 +4,7 @@ import * as path from "node:path"
 import AdmZip from "adm-zip"
 import obj2gltf from "obj2gltf"
 
-import { findFiles } from "./fs_utils"
+import { findFiles } from "../lib/fs_utils"
 
 function extractZip(zipPath: string, targetDir: string) {
   const zip = new AdmZip(zipPath)

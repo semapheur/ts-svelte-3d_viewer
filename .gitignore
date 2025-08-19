@@ -15,6 +15,7 @@ public/models
 *.txt
 
 # Editor directories and files
+.mypy_cache
 .vscode/*
 !.vscode/extensions.json
 .idea

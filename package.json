@@ -10,11 +10,10 @@
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.1.4",
+    "@biomejs/biome": "^2.2.0",
     "@sveltejs/vite-plugin-svelte": "^6.1.0",
     "@tsconfig/svelte": "^5.0.4",
     "@types/adm-zip": "^0.5.7",
-    "@types/dat.gui": "^0.7.13",
     "@types/node": "^24.2.1",
     "@types/three": "^0.179.0",
     "adm-zip": "^0.5.16",
@@ -29,6 +28,7 @@
     "@gltf-transform/core": "^4.2.1",
     "lil-gui": "^0.20.0",
     "three": "^0.179.1",
+    "three-svg-renderer": "^1.0.4",
     "three-viewport-gizmo": "^2.2.0"
   }
 }
