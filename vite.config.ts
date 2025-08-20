@@ -13,11 +13,8 @@ export default defineConfig({
       },
     },
     cssCodeSplit: false,
-    //commonjsOptions: {
-    //  include: [/node_modules/],
-    //},
   },
-  //optimizeDeps: {
-  //  include: ["three", "dat.gui"],
-  //},
+  optimizeDeps: {
+    exclude: ["three-mesh-bvh"],
+  },
 })

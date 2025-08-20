@@ -1,6 +1,7 @@
 <script lang="ts">
 import { GUI } from "lil-gui"
-import { onDestroy, onMount } from "svelte"
+import type path from "path"
+import { onMount } from "svelte"
 import * as THREE from "three"
 import { OrbitControls } from "three/addons/controls/OrbitControls.js"
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js"
@@ -8,7 +9,8 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js"
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js"
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js"
 import { SobelOperatorShader } from "three/addons/shaders/SobelOperatorShader.js"
-import { WebGPURenderer } from "three/webgpu"
+import { PhysicalSpotLight, WebGLPathTracer } from "three-gpu-pathtracer"
+import { ParallelMeshBVHWorker } from "three-mesh-bvh/src/workers/ParallelMeshBVHWorker.js"
 import {
   FillPass,
   HiddenChainPass,
@@ -22,6 +24,7 @@ import { GeometryRepairer } from "./lib/geometry_fix"
 let container: HTMLDivElement | null = null
 
 let renderer: THREE.WebGLRenderer
+let pathTracer: WebGLPathTracer
 let composer: EffectComposer
 let sobelPass: ShaderPass
 let scene: THREE.Scene
@@ -33,6 +36,7 @@ let currentModel: THREE.Object3D | null = null
 
 let light: THREE.AmbientLight
 let dirLight: THREE.DirectionalLight
+let spotLight: PhysicalSpotLight
 let grid: THREE.GridHelper
 let ground: THREE.Mesh
 let gui: GUI | null = null
@@ -62,6 +66,7 @@ const materialParams = {
 }
 
 const viewParams = {
+  renderMode: "Raster",
   xray: false,
   lineMode: false,
   shadows: true,
@@ -167,7 +172,7 @@ function disposeModel(obj: THREE.Object3D | null) {
   })
 }
 
-function loadModelFromFile(file: File) {
+async function loadModelFromFile(file: File) {
   if (!loader) return
   if (currentModel) {
     scene.remove(currentModel)
@@ -182,12 +187,12 @@ function loadModelFromFile(file: File) {
     loader.parse(
       arrayBuffer,
       "",
-      (gltf) => {
+      async (gltf) => {
         currentModel = gltf.scene || gltf.scenes?.[0] || null
         if (!currentModel) return
         storeOriginalMaps(currentModel)
         storeOriginalMaterialState(currentModel)
-        normalizeAndAddModel(currentModel)
+        await normalizeAndAddModel(currentModel)
         updateMaterials()
         setModelShadows(currentModel, viewParams.shadows)
         focusOnObject(currentModel)
@@ -225,12 +230,17 @@ function focusOnObject(object: THREE.Object3D) {
   controls.update()
 }
 
-function normalizeAndAddModel(model: THREE.Object3D) {
+async function normalizeAndAddModel(model: THREE.Object3D) {
   const box = new THREE.Box3().setFromObject(model)
   const size = box.getSize(new THREE.Vector3())
   const maxDim = Math.max(size.x, size.y, size.z)
   if (maxDim > 0) model.scale.setScalar(1.0 / maxDim)
   scene.add(model)
+  await pathTracer.setSceneAsync(scene, camera, {
+    onProgress: (v: number) => {
+      console.log(`BVH progress: ${v}`)
+    },
+  })
 }
 
 function storeOriginalMaps(obj: THREE.Object3D) {
@@ -373,10 +383,10 @@ function toggleXray(enabled: boolean) {
   })
 }
 
-function onFileChange(event: Event) {
+async function onFileChange(event: Event) {
   const input = event.target as HTMLInputElement
   if (!input.files || input.files.length === 0) return
-  loadModelFromFile(input.files[0])
+  await loadModelFromFile(input.files[0])
 }
 
 function setupComposer(
@@ -590,7 +600,7 @@ async function exportScene(format: "png" | "svg") {
       let dataURL: string | undefined
 
       try {
-        //dataURL = await renderWithPathTracing(renderer, scene, camera)
+        dataURL = await renderWithPathTracing(renderer, scene, camera)
         if (dataURL === undefined) {
           throw new Error("WebGPU path tracing failed.")
         }
@@ -654,229 +664,291 @@ async function exportScene(format: "png" | "svg") {
   }
 }
 
-let rafId: number
-
 onMount(() => {
-  if (!container) return
+  let rafId: number
+  let resize: () => void
 
-  const width = container.clientWidth
-  const height = container.clientHeight
-
-  // renderer
-  renderer = new THREE.WebGLRenderer({ antialias: true })
-  renderer.setSize(width, height)
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-  renderer.outputColorSpace = THREE.SRGBColorSpace
-  renderer.toneMapping = THREE.ACESFilmicToneMapping
-  renderer.toneMappingExposure = 1.0
-  renderer.shadowMap.enabled = viewParams.shadows
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap
-  container.appendChild(renderer.domElement)
-
-  // scene
-  scene = new THREE.Scene()
-  scene.background = new THREE.Color(0x222222)
-
-  // camera
-  camera = new THREE.PerspectiveCamera(50, width / height, 0.01, 1000)
-  camera.position.set(2, 2, 2)
-
-  setupComposer(container, scene, camera)
-
-  // lights
-  light = new THREE.AmbientLight(0xffffff, lightParams.ambientIntensity)
-  scene.add(light)
-
-  dirLight = new THREE.DirectionalLight(0xffffff, lightParams.dirIntensity)
-  dirLight.position.set(lightParams.dirX, lightParams.dirY, lightParams.dirZ)
-  dirLight.castShadow = true
-  dirLight.shadow.mapSize.set(2048, 2048)
-  dirLight.shadow.camera.near = 0.01
-  dirLight.shadow.camera.far = 50
-  dirLight.shadow.camera.left = -10
-  dirLight.shadow.camera.right = 10
-  dirLight.shadow.camera.top = 10
-  dirLight.shadow.camera.bottom = -10
-  dirLight.shadow.bias = -0.0005
-  dirLight.shadow.normalBias = 0.02
-  scene.add(dirLight)
-
-  // grid
-  grid = new THREE.GridHelper(10, 20, 0x444444, 0x111111)
-  scene.add(grid)
-
-  // ground plane
-  const groundGeo = new THREE.PlaneGeometry(50, 50)
-  const groundMat = new THREE.MeshStandardMaterial({
-    color: 0x222222,
-    roughness: 1.0,
-  })
-  ground = new THREE.Mesh(groundGeo, groundMat)
-  ground.rotation.x = -Math.PI / 2
-  ground.position.y = -0.01
-  ground.receiveShadow = true
-  scene.add(ground)
-
-  // controls
-  controls = new OrbitControls(camera, renderer.domElement)
-  controls.enableDamping = true
-  controls.dampingFactor = 0.07
-  controls.screenSpacePanning = false
-
-  const gizmoOptions: GizmoOptions = {
-    placement: "bottom-right",
-  }
-  gizmo = new ViewportGizmo(camera, renderer, gizmoOptions)
-  gizmo.attachControls(controls)
-
-  // loader
-  loader = new GLTFLoader()
-
-  // GUI for lights
-  gui = new GUI()
-
-  const backgroundFolder = gui.addFolder("Background")
-  backgroundFolder
-    .addColor(bgParams, "color")
-    .name("BG Color")
-    .onChange((value: string) => {
-      scene.background = new THREE.Color(value)
-    })
-
-  backgroundFolder
-    .add(
-      {
-        reset: () => {
-          bgParams.color = backgroundColor
-          scene.background = new THREE.Color(backgroundColor)
-        },
-      },
-      "reset",
-    )
-    .name("Reset BG")
-
-  const lightFolder = gui.addFolder("Lights")
-  lightFolder
-    .add(lightParams, "ambientIntensity", 0, 2, 0.01)
-    .name("Ambient Light")
-    .onChange((value: number) => {
-      light.intensity = value
-    })
-  lightFolder
-    .add(lightParams, "dirIntensity", 0, 2, 0.01)
-    .name("Directional Light")
-    .onChange((value: number) => {
-      dirLight.intensity = value
-    })
-  lightFolder
-    .add(lightParams, "dirX", -20, 20, 0.1)
-    .name("Dir X")
-    .onChange((value: number) => {
-      dirLight.position.x = value
-    })
-
-  lightFolder
-    .add(lightParams, "dirY", -20, 20, 0.1)
-    .name("Dir Y")
-    .onChange((value: number) => {
-      dirLight.position.y = value
-    })
-
-  lightFolder
-    .add(lightParams, "dirZ", -20, 20, 0.1)
-    .name("Dir Z")
-    .onChange((value: number) => {
-      dirLight.position.z = value
-    })
-
-  const materialFolder = gui.addFolder("Materials")
-  materialFolder
-    .add(materialParams, "metalness", 0, 1, 0.01)
-    .name("Metalness")
-    .onChange(updateMaterials)
-  materialFolder
-    .add(materialParams, "roughness", 0, 1, 0.01)
-    .name("Roughness")
-    .onChange(updateMaterials)
-  materialFolder
-    .add(materialParams, "texturesEnabled")
-    .name("Textures")
-    .onChange(updateMaterials)
-
-  const toolsFolder = gui.addFolder("Tools")
-  toolsFolder
-    .add(viewParams, "xray")
-    .name("X-Ray View")
-    .onChange((v: boolean) => {
-      toggleXray(v)
-    })
-  toolsFolder
-    .add(viewParams, "lineMode")
-    .name("Line Mode")
-    .onChange((v: boolean) => {
-      if (sobelPass) sobelPass.enabled = v
-    })
-  toolsFolder
-    .add(viewParams, "shadows")
-    .name("Shadows")
-    .onChange((v: boolean) => {
-      renderer.shadowMap.enabled = v
-      if (currentModel) setModelShadows(currentModel, v)
-      ground.receiveShadow = v
-    })
-  toolsFolder
-    .add(bboxParams, "showBoundingBox")
-    .name("Show Bounding Box")
-    .onChange((v: boolean) => {
-      if (boundingBoxHelper) boundingBoxHelper.visible = v
-      dimensionLabels.forEach((l) => {
-        l.visible = v
-      })
-    })
-
-  const resize = () => {
+  async function init() {
     if (!container) return
 
-    const w = container.clientWidth
-    const h = container.clientHeight
-    camera.aspect = w / h
-    camera.updateProjectionMatrix()
-    renderer.setSize(w, h)
-    composer.setSize(w, h)
-    if (sobelPass) {
-      const pixelRatio = Math.min(window.devicePixelRatio, 2)
-      sobelPass.uniforms.resolution.value.x = w * pixelRatio
-      sobelPass.uniforms.resolution.value.y = h * pixelRatio
+    const width = container.clientWidth
+    const height = container.clientHeight
+
+    renderer = new THREE.WebGLRenderer({ antialias: true })
+    renderer.setSize(width, height)
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    renderer.outputColorSpace = THREE.SRGBColorSpace
+    renderer.toneMapping = THREE.ACESFilmicToneMapping
+    renderer.toneMappingExposure = 1.0
+    renderer.shadowMap.enabled = viewParams.shadows
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    container.appendChild(renderer.domElement)
+
+    // scene
+    scene = new THREE.Scene()
+    scene.background = new THREE.Color(0x222222)
+
+    // camera
+    camera = new THREE.PerspectiveCamera(50, width / height, 0.01, 1000)
+    camera.position.set(2, 2, 2)
+
+    setupComposer(container, scene, camera)
+
+    // lights
+    light = new THREE.AmbientLight(0xffffff, lightParams.ambientIntensity)
+    scene.add(light)
+
+    //dirLight = new THREE.DirectionalLight(0xffffff, lightParams.dirIntensity)
+    //dirLight.position.set(lightParams.dirX, lightParams.dirY, lightParams.dirZ)
+    //dirLight.castShadow = true
+    //dirLight.shadow.mapSize.set(2048, 2048)
+    //dirLight.shadow.camera.near = 0.01
+    //dirLight.shadow.camera.far = 50
+    //dirLight.shadow.camera.left = -10
+    //dirLight.shadow.camera.right = 10
+    //dirLight.shadow.camera.top = 10
+    //dirLight.shadow.camera.bottom = -10
+    //dirLight.shadow.bias = -0.0005
+    //dirLight.shadow.normalBias = 0.02
+    //scene.add(dirLight)
+    spotLight = new PhysicalSpotLight(0xffffff, 1000)
+    spotLight.position.set(lightParams.dirX, lightParams.dirY, lightParams.dirZ)
+
+    spotLight.castShadow = true
+    spotLight.shadow.mapSize.set(2048, 2048)
+    spotLight.shadow.camera.near = 0.1
+    spotLight.shadow.camera.far = 50
+    spotLight.shadow.focus = 1.0
+    scene.add(spotLight)
+
+    // grid
+    grid = new THREE.GridHelper(10, 20, 0x444444, 0x111111)
+    scene.add(grid)
+
+    // ground plane
+    const groundGeo = new THREE.PlaneGeometry(50, 50)
+    const groundMat = new THREE.MeshStandardMaterial({
+      color: 0x222222,
+      roughness: 1.0,
+    })
+    ground = new THREE.Mesh(groundGeo, groundMat)
+    ground.rotation.x = -Math.PI / 2
+    ground.position.y = -0.01
+    ground.receiveShadow = true
+    scene.add(ground)
+
+    // path tracer
+    pathTracer = new WebGLPathTracer(renderer)
+    pathTracer.setBVHWorker(new ParallelMeshBVHWorker())
+
+    // controls
+    controls = new OrbitControls(camera, renderer.domElement)
+    controls.enableDamping = true
+    controls.dampingFactor = 0.07
+    controls.screenSpacePanning = false
+
+    const gizmoOptions: GizmoOptions = {
+      placement: "bottom-right",
     }
-    gizmo.update()
+    gizmo = new ViewportGizmo(camera, renderer, gizmoOptions)
+    gizmo.attachControls(controls)
+
+    // loader
+    loader = new GLTFLoader()
+
+    // GUI for lights
+    gui = new GUI()
+
+    const backgroundFolder = gui.addFolder("Background")
+    backgroundFolder
+      .addColor(bgParams, "color")
+      .name("BG Color")
+      .onChange((value: string) => {
+        scene.background = new THREE.Color(value)
+      })
+
+    backgroundFolder
+      .add(
+        {
+          reset: () => {
+            bgParams.color = backgroundColor
+            scene.background = new THREE.Color(backgroundColor)
+          },
+        },
+        "reset",
+      )
+      .name("Reset BG")
+
+    const lightFolder = gui.addFolder("Lights")
+    lightFolder
+      .add(lightParams, "ambientIntensity", 0, 2, 0.01)
+      .name("Ambient Light")
+      .onChange((value: number) => {
+        light.intensity = value
+      })
+    lightFolder
+      .add(lightParams, "dirIntensity", 0, 2, 0.01)
+      .name("Directional Light")
+      .onChange((value: number) => {
+        //dirLight.intensity = value
+
+        if (spotLight) {
+          spotLight.intensity = value
+          pathTracer.updateLights()
+        }
+      })
+    lightFolder
+      .add(lightParams, "dirX", -20, 20, 0.1)
+      .name("Dir X")
+      .onChange((value: number) => {
+        //dirLight.position.x = value
+
+        if (spotLight) {
+          spotLight.position.x = value
+          pathTracer.updateLights()
+        }
+      })
+
+    lightFolder
+      .add(lightParams, "dirY", -20, 20, 0.1)
+      .name("Dir Y")
+      .onChange((value: number) => {
+        //dirLight.position.y = value
+
+        if (spotLight) {
+          spotLight.position.y = value
+          pathTracer.updateLights()
+        }
+      })
+
+    lightFolder
+      .add(lightParams, "dirZ", -20, 20, 0.1)
+      .name("Dir Z")
+      .onChange((value: number) => {
+        //dirLight.position.z = value
+
+        if (spotLight) {
+          spotLight.position.z = value
+          pathTracer.updateLights()
+        }
+      })
+
+    const materialFolder = gui.addFolder("Materials")
+    materialFolder
+      .add(materialParams, "metalness", 0, 1, 0.01)
+      .name("Metalness")
+      .onChange(updateMaterials)
+    materialFolder
+      .add(materialParams, "roughness", 0, 1, 0.01)
+      .name("Roughness")
+      .onChange(updateMaterials)
+    materialFolder
+      .add(materialParams, "texturesEnabled")
+      .name("Textures")
+      .onChange(updateMaterials)
+
+    const toolsFolder = gui.addFolder("Tools")
+    const pathTracerControlListener = () => pathTracer.updateCamera()
+
+    toolsFolder
+      .add(viewParams, "renderMode", ["Raster", "Path Tracer"])
+      .name("Render Mode")
+      .onChange((mode: string) => {
+        if (mode === "Raster") {
+          controls.removeEventListener("change", pathTracerControlListener)
+        } else if (mode === "Path Tracer") {
+          pathTracer.reset()
+          controls.addEventListener("change", pathTracerControlListener)
+        }
+      })
+    toolsFolder
+      .add(viewParams, "xray")
+      .name("X-Ray View")
+      .onChange((v: boolean) => {
+        toggleXray(v)
+      })
+    toolsFolder
+      .add(viewParams, "lineMode")
+      .name("Line Mode")
+      .onChange((v: boolean) => {
+        if (sobelPass) sobelPass.enabled = v
+      })
+    toolsFolder
+      .add(viewParams, "shadows")
+      .name("Shadows")
+      .onChange((v: boolean) => {
+        renderer.shadowMap.enabled = v
+        if (currentModel) setModelShadows(currentModel, v)
+        ground.receiveShadow = v
+      })
+    toolsFolder
+      .add(bboxParams, "showBoundingBox")
+      .name("Show Bounding Box")
+      .onChange((v: boolean) => {
+        if (boundingBoxHelper) boundingBoxHelper.visible = v
+        dimensionLabels.forEach((l) => {
+          l.visible = v
+        })
+      })
+
+    resize = () => {
+      if (!container) return
+
+      const w = container.clientWidth
+      const h = container.clientHeight
+      camera.aspect = w / h
+      camera.updateProjectionMatrix()
+      renderer.setSize(w, h)
+      composer.setSize(w, h)
+      if (pathTracer) {
+        pathTracer.updateCamera()
+      }
+      if (sobelPass) {
+        const pixelRatio = Math.min(window.devicePixelRatio, 2)
+        sobelPass.uniforms.resolution.value.x = w * pixelRatio
+        sobelPass.uniforms.resolution.value.y = h * pixelRatio
+      }
+      gizmo.update()
+    }
+
+    window.addEventListener("resize", resize)
+
+    const animate = () => {
+      controls.update()
+      updateLabelPositions()
+      if (viewParams.renderMode === "Raster" || viewParams.lineMode) {
+        composer.render()
+      } else if (viewParams.renderMode === "Path Tracer") {
+        pathTracer.renderSample()
+      }
+      gizmo.render()
+      rafId = requestAnimationFrame(animate)
+    }
+    animate()
   }
 
-  window.addEventListener("resize", resize)
-
-  const animate = () => {
-    controls.update()
-    updateLabelPositions()
-    composer.render()
-    gizmo.render()
-    rafId = requestAnimationFrame(animate)
-  }
-  animate()
+  init()
 
   return () => {
-    window.removeEventListener("resize", resize)
-    gui?.destroy()
-    gui = null
+    if (rafId) {
+      cancelAnimationFrame(rafId)
+    }
+    if (resize) {
+      window.removeEventListener("resize", resize)
+    }
+    if (gui) {
+      gui.destroy()
+      gui = null
+    }
+    if (renderer) {
+      renderer.forceContextLoss()
+      renderer.domElement?.remove()
+      renderer.dispose()
+    }
+    if (pathTracer) pathTracer.dispose()
+    if (composer) composer.dispose()
+    if (currentModel) disposeModel(currentModel)
   }
-})
-
-onDestroy(() => {
-  cancelAnimationFrame(rafId)
-  if (renderer) {
-    renderer.forceContextLoss()
-    renderer.domElement?.remove()
-    renderer.dispose()
-  }
-  if (currentModel) disposeModel(currentModel)
 })
 </script>
 
