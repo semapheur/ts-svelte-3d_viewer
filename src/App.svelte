@@ -1,6 +1,6 @@
 <script lang="ts">
 import { GUI } from "lil-gui"
-import type path from "path"
+import path from "path"
 import { onMount } from "svelte"
 import * as THREE from "three"
 import { OrbitControls } from "three/addons/controls/OrbitControls.js"
@@ -19,9 +19,12 @@ import {
   VisibleChainPass,
 } from "three-svg-renderer"
 import { type GizmoOptions, ViewportGizmo } from "three-viewport-gizmo"
+import ProgressBar from "./components/progress_bar.svelte"
 import { GeometryRepairer } from "./lib/geometry_fix"
 
 let container: HTMLDivElement | null = null
+let progress = $state(0)
+let loading = $state(false)
 
 let renderer: THREE.WebGLRenderer
 let pathTracer: WebGLPathTracer
@@ -34,11 +37,12 @@ let gizmo: ViewportGizmo
 let loader: GLTFLoader
 let currentModel: THREE.Object3D | null = null
 
-let light: THREE.AmbientLight
-let dirLight: THREE.DirectionalLight
+let globalLight: THREE.RectAreaLight
 let spotLight: PhysicalSpotLight
+let spotLightHelper: THREE.SpotLightHelper
 let grid: THREE.GridHelper
-let ground: THREE.Mesh
+let globalSurface: THREE.Mesh
+let globalSurfaceMaterial: THREE.MeshStandardMaterial
 let gui: GUI | null = null
 
 let boundingBoxHelper: THREE.BoxHelper | null = null
@@ -47,26 +51,26 @@ const bboxParams = { showBoundingBox: false }
 
 const backgroundColor = "#222222"
 
-const bgParams = {
-  color: "#222222",
+const sceneParams = {
+  backgroundColor: "#222222",
+  globalLight: 2.0,
+  showGrid: true,
+  gridSize: 10,
+  showSurface: true,
+  surfaceRoughness: 1.0,
+  surfaceMetalness: 0.0,
 }
 
-const lightParams = {
-  ambientIntensity: 0.6,
-  dirIntensity: 0.8,
-  dirX: 5,
-  dirY: 10,
-  dirZ: 7.5,
-}
-
-const materialParams = {
-  metalness: 0.0,
-  roughness: 0.7,
-  texturesEnabled: true,
+const spotLightParams = {
+  intensity: 100,
+  distance: 10,
+  azimuth: 45,
+  polar: 45,
 }
 
 const viewParams = {
   renderMode: "Raster",
+  texturesEnabled: true,
   xray: false,
   lineMode: false,
   shadows: true,
@@ -236,11 +240,20 @@ async function normalizeAndAddModel(model: THREE.Object3D) {
   const maxDim = Math.max(size.x, size.y, size.z)
   if (maxDim > 0) model.scale.setScalar(1.0 / maxDim)
   scene.add(model)
+
+  loading = true
+  progress = 0
   await pathTracer.setSceneAsync(scene, camera, {
     onProgress: (v: number) => {
-      console.log(`BVH progress: ${v}`)
+      progress = v * 100
     },
   })
+
+  progress = 100
+  setTimeout(() => {
+    loading = false
+    progress = 0
+  }, 500)
 }
 
 function storeOriginalMaps(obj: THREE.Object3D) {
@@ -284,12 +297,8 @@ function updateMaterials() {
         ? child.material
         : [child.material]
       materials.forEach((material: THREE.Material) => {
-        if ("metalness" in material)
-          material.metalness = materialParams.metalness
-        if ("roughness" in material)
-          material.roughness = materialParams.roughness
         if ("map" in material)
-          material.map = materialParams.texturesEnabled
+          material.map = viewParams.texturesEnabled
             ? material.userData.originalMap || null
             : null
 
@@ -297,6 +306,7 @@ function updateMaterials() {
       })
     }
   })
+  pathTracer.updateMaterials()
 }
 
 function setModelShadows(model: THREE.Object3D, enabled: boolean) {
@@ -341,6 +351,27 @@ function updateLabelPositions() {
   })
 }
 
+function updateGlobalSurfaceAndLight() {
+  if (!camera) return
+
+  if (globalLight) {
+    globalLight.position.x = Math.floor(camera.position.x / 10) * 10
+    globalLight.position.z = Math.floor(camera.position.z / 10) * 10
+  }
+
+  if (globalSurface) {
+    globalSurface.position.x = Math.floor(camera.position.x / 10) * 10
+    globalSurface.position.z = Math.floor(camera.position.z / 10) * 10
+
+    // Optional: Update texture offset for seamless movement
+    if (globalSurfaceMaterial.map) {
+      const offsetX = (camera.position.x % 10) / 10
+      const offsetZ = (camera.position.z % 10) / 10
+      globalSurfaceMaterial.map.offset.set(offsetX, offsetZ)
+    }
+  }
+}
+
 function toggleXray(enabled: boolean) {
   if (!currentModel) return
 
@@ -359,7 +390,6 @@ function toggleXray(enabled: boolean) {
 
       materials.forEach((material: THREE.Material) => {
         if (isInternal) {
-          console.log(child.children)
           if (enabled) {
             child.renderOrder = 2
             material.depthTest = false
@@ -439,7 +469,7 @@ async function renderWithAccumulation(
 
   // Enable advanced rendering features for ray-traced quality
   renderer.shadowMap.enabled = true
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap // Soft shadows
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap
   renderer.toneMapping = THREE.ACESFilmicToneMapping
   renderer.toneMappingExposure = 1.2
 
@@ -592,7 +622,6 @@ function downloadImage(dataURL: string, filename: string = "image.png") {
 async function exportScene(format: "png" | "svg") {
   if (!container || !currentModel) return
 
-  grid.visible = false
   gizmo.visible = false
 
   try {
@@ -655,11 +684,8 @@ async function exportScene(format: "png" | "svg") {
           link.click()
           URL.revokeObjectURL(url)
         })
-
-      ground.visible = true
     }
   } finally {
-    grid.visible = true
     gizmo.visible = true
   }
 }
@@ -695,24 +721,25 @@ onMount(() => {
     setupComposer(container, scene, camera)
 
     // lights
-    light = new THREE.AmbientLight(0xffffff, lightParams.ambientIntensity)
-    scene.add(light)
+    //light = new THREE.AmbientLight(0xffffff, lightParams.ambientIntensity)
+    globalLight = new THREE.RectAreaLight(
+      0xffffff,
+      sceneParams.globalLight,
+      1000,
+      1000,
+    )
+    globalLight.position.set(0, 100, 0)
+    globalLight.lookAt(0, 0, 0)
+    scene.add(globalLight)
 
-    //dirLight = new THREE.DirectionalLight(0xffffff, lightParams.dirIntensity)
-    //dirLight.position.set(lightParams.dirX, lightParams.dirY, lightParams.dirZ)
-    //dirLight.castShadow = true
-    //dirLight.shadow.mapSize.set(2048, 2048)
-    //dirLight.shadow.camera.near = 0.01
-    //dirLight.shadow.camera.far = 50
-    //dirLight.shadow.camera.left = -10
-    //dirLight.shadow.camera.right = 10
-    //dirLight.shadow.camera.top = 10
-    //dirLight.shadow.camera.bottom = -10
-    //dirLight.shadow.bias = -0.0005
-    //dirLight.shadow.normalBias = 0.02
-    //scene.add(dirLight)
     spotLight = new PhysicalSpotLight(0xffffff, 1000)
-    spotLight.position.set(lightParams.dirX, lightParams.dirY, lightParams.dirZ)
+    spotLight.position.setFromSpherical(
+      new THREE.Spherical(
+        spotLightParams.distance,
+        spotLightParams.polar,
+        spotLightParams.azimuth,
+      ),
+    )
 
     spotLight.castShadow = true
     spotLight.shadow.mapSize.set(2048, 2048)
@@ -721,21 +748,25 @@ onMount(() => {
     spotLight.shadow.focus = 1.0
     scene.add(spotLight)
 
+    //spotLightHelper = new THREE.SpotLightHelper(spotLight, 0xffffff)
+    //scene.add(spotLightHelper)
+
     // grid
     grid = new THREE.GridHelper(10, 20, 0x444444, 0x111111)
     scene.add(grid)
 
     // ground plane
-    const groundGeo = new THREE.PlaneGeometry(50, 50)
-    const groundMat = new THREE.MeshStandardMaterial({
+    const surfaceGeometry = new THREE.PlaneGeometry(1000, 1000)
+    globalSurfaceMaterial = new THREE.MeshStandardMaterial({
       color: 0x222222,
       roughness: 1.0,
+      metalness: 0.0,
     })
-    ground = new THREE.Mesh(groundGeo, groundMat)
-    ground.rotation.x = -Math.PI / 2
-    ground.position.y = -0.01
-    ground.receiveShadow = true
-    scene.add(ground)
+    globalSurface = new THREE.Mesh(surfaceGeometry, globalSurfaceMaterial)
+    globalSurface.rotation.x = -Math.PI / 2
+    globalSurface.position.y = -0.01
+    globalSurface.receiveShadow = true
+    scene.add(globalSurface)
 
     // path tracer
     pathTracer = new WebGLPathTracer(renderer)
@@ -759,93 +790,126 @@ onMount(() => {
     // GUI for lights
     gui = new GUI()
 
-    const backgroundFolder = gui.addFolder("Background")
-    backgroundFolder
-      .addColor(bgParams, "color")
-      .name("BG Color")
+    const sceneFolder = gui.addFolder("Scene")
+    sceneFolder
+      .add(sceneParams, "globalLight", 0, 3, 0.1)
+      .name("Global Light")
+      .onChange((value: number) => {
+        globalLight.intensity = value
+        pathTracer.updateLights()
+      })
+
+    sceneFolder
+      .addColor(sceneParams, "backgroundColor")
+      .name("Background color")
       .onChange((value: string) => {
         scene.background = new THREE.Color(value)
       })
 
-    backgroundFolder
+    sceneFolder
       .add(
         {
           reset: () => {
-            bgParams.color = backgroundColor
+            sceneParams.backgroundColor = backgroundColor
             scene.background = new THREE.Color(backgroundColor)
           },
         },
         "reset",
       )
-      .name("Reset BG")
+      .name("Reset background")
 
-    const lightFolder = gui.addFolder("Lights")
-    lightFolder
-      .add(lightParams, "ambientIntensity", 0, 2, 0.01)
-      .name("Ambient Light")
-      .onChange((value: number) => {
-        light.intensity = value
-      })
-    lightFolder
-      .add(lightParams, "dirIntensity", 0, 2, 0.01)
-      .name("Directional Light")
-      .onChange((value: number) => {
-        //dirLight.intensity = value
-
-        if (spotLight) {
-          spotLight.intensity = value
-          pathTracer.updateLights()
-        }
-      })
-    lightFolder
-      .add(lightParams, "dirX", -20, 20, 0.1)
-      .name("Dir X")
-      .onChange((value: number) => {
-        //dirLight.position.x = value
-
-        if (spotLight) {
-          spotLight.position.x = value
-          pathTracer.updateLights()
-        }
+    sceneFolder
+      .add(sceneParams, "showGrid")
+      .name("Show Grid")
+      .onChange((value: boolean) => {
+        grid.visible = value
       })
 
-    lightFolder
-      .add(lightParams, "dirY", -20, 20, 0.1)
-      .name("Dir Y")
+    sceneFolder
+      .add(sceneParams, "gridSize", 10, 100, 10)
+      .name("Grid Size")
       .onChange((value: number) => {
-        //dirLight.position.y = value
-
-        if (spotLight) {
-          spotLight.position.y = value
-          pathTracer.updateLights()
-        }
+        scene.remove(grid)
+        grid.dispose()
+        grid = new THREE.GridHelper(value, value * 2, 0x444444, 0x111111)
+        grid.position.y = -0.01
+        grid.visible = sceneParams.showGrid
+        scene.add(grid)
       })
 
-    lightFolder
-      .add(lightParams, "dirZ", -20, 20, 0.1)
-      .name("Dir Z")
-      .onChange((value: number) => {
-        //dirLight.position.z = value
-
-        if (spotLight) {
-          spotLight.position.z = value
-          pathTracer.updateLights()
-        }
+    sceneFolder
+      .add(sceneParams, "showSurface")
+      .name("Show Surface")
+      .onChange((value: boolean) => {
+        globalSurface.visible = value
       })
 
-    const materialFolder = gui.addFolder("Materials")
-    materialFolder
-      .add(materialParams, "metalness", 0, 1, 0.01)
-      .name("Metalness")
-      .onChange(updateMaterials)
-    materialFolder
-      .add(materialParams, "roughness", 0, 1, 0.01)
-      .name("Roughness")
-      .onChange(updateMaterials)
-    materialFolder
-      .add(materialParams, "texturesEnabled")
-      .name("Textures")
-      .onChange(updateMaterials)
+    sceneFolder
+      .add(sceneParams, "surfaceRoughness", 0, 1, 0.01)
+      .name("Surface roughness")
+      .onChange((value: number) => {
+        globalSurfaceMaterial.roughness = value
+        globalSurfaceMaterial.needsUpdate = true
+        pathTracer.updateMaterials()
+      })
+
+    sceneFolder
+      .add(sceneParams, "surfaceMetalness", 0, 1, 0.01)
+      .name("Surface metalness")
+      .onChange((value: number) => {
+        globalSurfaceMaterial.metalness = value
+        globalSurfaceMaterial.needsUpdate = true
+        pathTracer.updateMaterials()
+      })
+
+    const spotLightFolder = gui.addFolder("Spot light")
+
+    spotLightFolder
+      .add(spotLightParams, "intensity", 0, 1000, 10)
+      .name("Intensity")
+      .onChange((value: number) => {
+        spotLight.intensity = value
+        pathTracer.updateLights()
+      })
+
+    spotLightFolder
+      .add(spotLightParams, "distance", 0, 100, 1)
+      .name("Distance")
+      .onChange((value: number) => {
+        const spherical = new THREE.Spherical(
+          value,
+          spotLightParams.azimuth,
+          spotLightParams.polar,
+        )
+        spotLight.position.setFromSpherical(spherical)
+        pathTracer.updateLights()
+      })
+
+    spotLightFolder
+      .add(spotLightParams, "azimuth", 0, 360, 1)
+      .name("Azimuthal angle")
+      .onChange((value: number) => {
+        const spherical = new THREE.Spherical(
+          spotLightParams.distance,
+          spotLightParams.polar,
+          THREE.MathUtils.degToRad(value),
+        )
+        spotLight.position.setFromSpherical(spherical)
+        pathTracer.updateLights()
+      })
+
+    spotLightFolder
+      .add(spotLightParams, "polar", 0, 180, 1)
+      .name("Polar angle")
+      .onChange((value: number) => {
+        const spherical = new THREE.Spherical(
+          spotLightParams.distance,
+          THREE.MathUtils.degToRad(value),
+          spotLightParams.azimuth,
+        )
+        spotLight.position.setFromSpherical(spherical)
+        pathTracer.updateLights()
+      })
 
     const toolsFolder = gui.addFolder("Tools")
     const pathTracerControlListener = () => pathTracer.updateCamera()
@@ -861,6 +925,12 @@ onMount(() => {
           controls.addEventListener("change", pathTracerControlListener)
         }
       })
+
+    toolsFolder
+      .add(viewParams, "texturesEnabled")
+      .name("Textures")
+      .onChange(updateMaterials)
+
     toolsFolder
       .add(viewParams, "xray")
       .name("X-Ray View")
@@ -879,7 +949,7 @@ onMount(() => {
       .onChange((v: boolean) => {
         renderer.shadowMap.enabled = v
         if (currentModel) setModelShadows(currentModel, v)
-        ground.receiveShadow = v
+        globalSurface.receiveShadow = v
       })
     toolsFolder
       .add(bboxParams, "showBoundingBox")
@@ -916,10 +986,13 @@ onMount(() => {
     const animate = () => {
       controls.update()
       updateLabelPositions()
+      updateGlobalSurfaceAndLight()
       if (viewParams.renderMode === "Raster" || viewParams.lineMode) {
         composer.render()
       } else if (viewParams.renderMode === "Path Tracer") {
         pathTracer.renderSample()
+        progress = pathTracer.samples
+        loading = pathTracer.isCompiling
       }
       gizmo.render()
       rafId = requestAnimationFrame(animate)
@@ -945,7 +1018,9 @@ onMount(() => {
       renderer.domElement?.remove()
       renderer.dispose()
     }
-    if (pathTracer) pathTracer.dispose()
+    if (pathTracer && typeof pathTracer.dispose === "function") {
+      pathTracer.dispose()
+    }
     if (composer) composer.dispose()
     if (currentModel) disposeModel(currentModel)
   }
@@ -956,13 +1031,22 @@ onMount(() => {
   <header class="header">
     <label style="margin: 1rem; color: #eee;">
       Load .glb Model:
-      <input type="file" accept=".glb" on:change={onFileChange} style="margin-left: 1rem;" />
+      <input type="file" accept=".glb" onchange={onFileChange} style="margin-left: 1rem;" />
     </label>
     <div>
-      <button on:click={() => exportScene("png")}>Export PNG</button>
-      <button on:click={() => exportScene("svg")}>Export SVG</button>
+      <button onclick={() => exportScene("png")}>Export PNG</button>
+      <button onclick={() => exportScene("svg")}>Export SVG</button>
     </div>
   </header>
+  <ProgressBar 
+    value={progress}
+    visible={loading} 
+    top="calc(100% - 0.5rem)"
+    left="0"
+    barWidth="100%"
+    barHeight="0.5rem"
+  />
+
   <div bind:this={container} class="viewer"></div>
 </div>
 
