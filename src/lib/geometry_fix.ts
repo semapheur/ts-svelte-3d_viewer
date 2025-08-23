@@ -407,6 +407,52 @@ export class GeometryRepairer {
     return facesToRemove.size
   }
 
+  private removeDegenerateFacesForMesh(mesh: THREE.Mesh): number {
+    const geometry = mesh.geometry as THREE.BufferGeometry
+    const indices = geometry.index?.array as Uint16Array | Uint32Array | null
+
+    if (!indices) {
+      console.log("Cannot remove degenerate faces from non-indexed geometry")
+      return 0
+    }
+
+    const newIndices: number[] = []
+    let removed = 0
+
+    for (let i = 0; i < indices.length; i += 3) {
+      const a = indices[i],
+        b = indices[i + 1],
+        c = indices[i + 2]
+      // Skip faces where any two indices are the same
+      if (a === b || b === c || c === a) {
+        removed++
+        continue
+      }
+      newIndices.push(a, b, c)
+    }
+
+    geometry.setIndex(newIndices)
+    return removed
+  }
+
+  public removeDegenerateFaces(object3D: THREE.Object3D): number {
+    this.extractMeshes(object3D)
+    let totalRemoved = 0
+
+    console.log(`Removing degenerate faces for ${this.meshes.length} meshes...`)
+
+    this.meshes.forEach((meshData) => {
+      const removed = this.removeDegenerateFacesForMesh(meshData.mesh)
+      totalRemoved += removed
+      if (removed > 0) {
+        console.log(`${meshData.name}: removed ${removed} degenerate faces`)
+      }
+    })
+
+    console.log(`Total degenerate faces removed: ${totalRemoved}`)
+    return totalRemoved
+  }
+
   public recalculateNormals(object3D: THREE.Object3D): number {
     this.extractMeshes(object3D)
 
@@ -447,6 +493,10 @@ export class GeometryRepairer {
       {
         name: "fixNonManifoldEdges",
         fn: () => this.fixNonManifoldEdges(object3D),
+      },
+      {
+        name: "removeDegenerateFaces",
+        fn: () => this.removeDegenerateFaces(object3D),
       },
       {
         name: "recalculateNormals",

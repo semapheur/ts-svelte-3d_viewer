@@ -1,6 +1,5 @@
 <script lang="ts">
 import { GUI } from "lil-gui"
-import path from "path"
 import { onMount } from "svelte"
 import * as THREE from "three"
 import { OrbitControls } from "three/addons/controls/OrbitControls.js"
@@ -13,7 +12,7 @@ import { PhysicalSpotLight, WebGLPathTracer } from "three-gpu-pathtracer"
 import { ParallelMeshBVHWorker } from "three-mesh-bvh/src/workers/ParallelMeshBVHWorker.js"
 import {
   FillPass,
-  HiddenChainPass,
+  //HiddenChainPass,
   SVGMesh,
   SVGRenderer,
   VisibleChainPass,
@@ -241,6 +240,10 @@ async function normalizeAndAddModel(model: THREE.Object3D) {
   if (maxDim > 0) model.scale.setScalar(1.0 / maxDim)
   scene.add(model)
 
+  await setPathTracerScene()
+}
+
+async function setPathTracerScene() {
   loading = true
   progress = 0
   await pathTracer.setSceneAsync(scene, camera, {
@@ -297,12 +300,12 @@ function updateMaterials() {
         ? child.material
         : [child.material]
       materials.forEach((material: THREE.Material) => {
-        if ("map" in material)
+        if ("map" in material) {
           material.map = viewParams.texturesEnabled
             ? material.userData.originalMap || null
             : null
-
-        material.needsUpdate = true
+          material.needsUpdate = true
+        }
       })
     }
   })
@@ -577,41 +580,6 @@ async function renderWithAccumulation(
   return dataURL
 }
 
-async function renderWithPathTracing(
-  renderer: THREE.WebGLRenderer,
-  scene: THREE.Scene,
-  camera: THREE.Camera,
-  resolutionMultiplier: number = 2,
-): Promise<string | undefined> {
-  if (!navigator.gpu) return
-
-  const adapter = await navigator.gpu.requestAdapter()
-  if (!adapter) {
-    console.warn("Failed to get GPU adapter")
-    return
-  }
-
-  const device = await adapter.requestDevice()
-
-  const pathTracingRenderer = new WebGPURenderer({
-    canvas: document.createElement("canvas"),
-    device: device,
-    antialias: true,
-  })
-
-  pathTracingRenderer.setSize(
-    renderer.domElement.width * resolutionMultiplier,
-    renderer.domElement.height * resolutionMultiplier,
-  )
-
-  pathTracingRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-  pathTracingRenderer.toneMapping = THREE.ACESFilmicToneMapping
-  pathTracingRenderer.toneMappingExposure = 1.0
-
-  await pathTracingRenderer.renderAsync(scene, camera)
-  return pathTracingRenderer.domElement.toDataURL("image/png")
-}
-
 function downloadImage(dataURL: string, filename: string = "image.png") {
   const link = document.createElement("a")
   link.href = dataURL
@@ -619,75 +587,85 @@ function downloadImage(dataURL: string, filename: string = "image.png") {
   link.click()
 }
 
+;(THREE.Triangle as any).getUV = (
+  point: THREE.Vector3,
+  p1: THREE.Vector3,
+  p2: THREE.Vector3,
+  p3: THREE.Vector3,
+  uv1: THREE.Vector2,
+  uv2: THREE.Vector2,
+  uv3: THREE.Vector2,
+  target: THREE.Vector2,
+) => {
+  const barycoord = new THREE.Vector3()
+  THREE.Triangle.getBarycoord(point, p1, p2, p3, barycoord)
+
+  target.set(
+    uv1.x * barycoord.x + uv2.x * barycoord.y + uv3.x * barycoord.z,
+    uv1.y * barycoord.x + uv2.y * barycoord.y + uv3.y * barycoord.z,
+  )
+  return target
+}
+
 async function exportScene(format: "png" | "svg") {
   if (!container || !currentModel) return
 
   gizmo.visible = false
 
-  try {
-    if (format === "png") {
-      let dataURL: string | undefined
-
-      try {
-        dataURL = await renderWithPathTracing(renderer, scene, camera)
-        if (dataURL === undefined) {
-          throw new Error("WebGPU path tracing failed.")
-        }
-      } catch (error) {
-        console.warn(
-          "WebGPU path tracing not available, falling back to accumulation method:",
-          error,
-        )
-        dataURL = await renderWithAccumulation(renderer, scene, camera)
-      }
-
-      downloadImage(dataURL, "scene.png")
+  if (format === "png") {
+    if (viewParams.renderMode === "Raster" || viewParams.lineMode) {
+      composer.render()
+    } else if (viewParams.renderMode === "Path Tracer") {
+      pathTracer.renderSample()
     }
 
-    if (format === "svg") {
-      const repairer = new GeometryRepairer()
-      const modelCopy = currentModel.clone(true)
-      await repairer.repairGeometry(modelCopy, {
-        mergeTolerance: 1e-5,
-      })
-
-      //ground.visible = false
-      const svgMeshes: SVGMesh[] = []
-      modelCopy.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          svgMeshes.push(new SVGMesh(child))
-        }
-      })
-
-      const svgRenderer = new SVGRenderer()
-      svgRenderer.addPass(new FillPass())
-      svgRenderer.addPass(
-        new VisibleChainPass({ defaultStyle: { color: "#ffffff", width: 1 } }),
-      )
-      svgRenderer.addPass(
-        new HiddenChainPass({ defaultStyle: { color: "#ffffff", width: 1 } }),
-      )
-
-      svgRenderer
-        .generateSVG(svgMeshes, camera, {
-          w: container.clientWidth,
-          h: container.clientHeight,
-        })
-        .then((svg) => {
-          const blob = new Blob([svg.toString()], {
-            type: "image/svg+xml;charset=utf-8",
-          })
-          const link = document.createElement("a")
-          const url = URL.createObjectURL(blob)
-          link.href = url
-          link.download = "scene.svg"
-          link.click()
-          URL.revokeObjectURL(url)
-        })
-    }
-  } finally {
-    gizmo.visible = true
+    const dataURL = renderer.domElement.toDataURL("image/png", 1.0)
+    downloadImage(dataURL, "scene.png")
   }
+
+  if (format === "svg") {
+    const repairer = new GeometryRepairer()
+    const modelCopy = currentModel.clone(true)
+    await repairer.repairGeometry(modelCopy, {
+      mergeTolerance: 1e-5,
+    })
+
+    //ground.visible = false
+    const svgMeshes: SVGMesh[] = []
+    modelCopy.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        svgMeshes.push(new SVGMesh(child))
+      }
+    })
+
+    const svgRenderer = new SVGRenderer()
+    svgRenderer.addPass(new FillPass())
+    svgRenderer.addPass(
+      new VisibleChainPass({ defaultStyle: { color: "#000000", width: 1 } }),
+    )
+    //svgRenderer.addPass(
+    //  new HiddenChainPass({ defaultStyle: { color: "#000000", width: 1 } }),
+    //)
+
+    svgRenderer
+      .generateSVG(svgMeshes, camera, {
+        w: container.clientWidth,
+        h: container.clientHeight,
+      })
+      .then((svg) => {
+        const blob = new Blob([svg.svg()], {
+          type: "image/svg+xml;charset=utf-8",
+        })
+        const link = document.createElement("a")
+        const url = URL.createObjectURL(blob)
+        link.href = url
+        link.download = "scene.svg"
+        link.click()
+        URL.revokeObjectURL(url)
+      })
+  }
+
+  gizmo.visible = true
 }
 
 onMount(() => {
@@ -721,7 +699,6 @@ onMount(() => {
     setupComposer(container, scene, camera)
 
     // lights
-    //light = new THREE.AmbientLight(0xffffff, lightParams.ambientIntensity)
     globalLight = new THREE.RectAreaLight(
       0xffffff,
       sceneParams.globalLight,
@@ -840,8 +817,9 @@ onMount(() => {
     sceneFolder
       .add(sceneParams, "showSurface")
       .name("Show Surface")
-      .onChange((value: boolean) => {
+      .onChange(async (value: boolean) => {
         globalSurface.visible = value
+        await setPathTracerScene()
       })
 
     sceneFolder
