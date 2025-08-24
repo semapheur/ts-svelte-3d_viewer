@@ -20,6 +20,7 @@ import {
 import { type GizmoOptions, ViewportGizmo } from "three-viewport-gizmo"
 import ProgressBar from "./components/progress_bar.svelte"
 import Spinner from "./components/spinner.svelte"
+import { generateVisibleEdgesSVG } from "./lib/generate_svg"
 import { GeometryRepairer } from "./lib/geometry_fix"
 
 let container: HTMLDivElement | null = null
@@ -32,7 +33,7 @@ let pathTracer: WebGLPathTracer
 let composer: EffectComposer
 let sobelPass: ShaderPass
 let scene: THREE.Scene
-let camera: THREE.PerspectiveCamera
+let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera
 let controls: OrbitControls
 let gizmo: ViewportGizmo
 let loader: GLTFLoader
@@ -71,6 +72,7 @@ const spotLightParams = {
 
 const viewParams = {
   renderMode: "Raster",
+  camera: "Perspective",
   texturesEnabled: true,
   xray: false,
   lineMode: false,
@@ -221,17 +223,39 @@ function focusOnObject(object: THREE.Object3D) {
   controls.target.copy(center)
 
   const maxDim = Math.max(size.x, size.y, size.z)
-  const fov = camera.fov * (Math.PI / 180)
-  let cameraZ = Math.abs(maxDim / Math.tan(fov / 2))
 
-  cameraZ *= 1.5 // add a margin
-  camera.position.set(
-    center.x + cameraZ,
-    center.y + cameraZ,
-    center.z + cameraZ,
-  )
+  if (camera instanceof THREE.PerspectiveCamera) {
+    // Perspective camera - calculate distance based on FOV
+    const fov = camera.fov * (Math.PI / 180)
+    let cameraZ = Math.abs(maxDim / Math.tan(fov / 2))
+    cameraZ *= 1.5 // add a margin
+
+    camera.position.set(
+      center.x + cameraZ,
+      center.y + cameraZ,
+      center.z + cameraZ,
+    )
+  } else if (camera instanceof THREE.OrthographicCamera) {
+    // Orthographic camera - adjust zoom instead of distance
+    const margin = 1.5
+    const requiredZoom = Math.min(
+      (camera.right - camera.left) / (size.x * margin),
+      (camera.top - camera.bottom) / (size.y * margin),
+    )
+
+    camera.zoom = Math.max(requiredZoom, 0.1) // prevent zero/negative zoom
+    camera.updateProjectionMatrix()
+
+    // Still move the camera position for better 3D perspective
+    const distance = maxDim * 2 // arbitrary distance for good 3D view
+    camera.position.set(
+      center.x + distance,
+      center.y + distance,
+      center.z + distance,
+    )
+  }
+
   camera.lookAt(center)
-
   controls.update()
 }
 
@@ -427,11 +451,9 @@ async function onFileChange(event: Event) {
   await loadModelFromFile(input.files[0])
 }
 
-function setupComposer(
-  container: HTMLDivElement,
-  scene: THREE.Scene,
-  camera: THREE.Camera,
-) {
+function setupComposer() {
+  if (!container) return
+
   const width = container.clientWidth
   const height = container.clientHeight
   const pixelRatio = Math.min(window.devicePixelRatio, 2)
@@ -494,45 +516,65 @@ async function exportScene(format: "png" | "svg") {
   }
 
   if (format === "svg") {
-    const repairer = new GeometryRepairer()
-    const modelCopy = currentModel.clone(true)
-    await repairer.repairGeometry(modelCopy, {
-      mergeTolerance: 1e-5,
-    })
+    let svg = ""
 
-    //ground.visible = false
-    const svgMeshes: SVGMesh[] = []
-    modelCopy.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        svgMeshes.push(new SVGMesh(child))
+    try {
+      const repairer = new GeometryRepairer()
+      const modelCopy = currentModel.clone(true)
+      const results = await repairer.repairGeometry(modelCopy, {
+        mergeTolerance: 1e-5,
+      })
+
+      const totalIssues = results.finalAnalysis.totalStats.totalIssues
+      if (totalIssues !== undefined && totalIssues > 0) {
+        throw new Error(
+          "Model has issues preventing SVG export using 'three-svg-renderer'",
+        )
       }
-    })
 
-    const svgRenderer = new SVGRenderer()
-    svgRenderer.addPass(new FillPass())
-    svgRenderer.addPass(
-      new VisibleChainPass({ defaultStyle: { color: "#000000", width: 1 } }),
-    )
-    //svgRenderer.addPass(
-    //  new HiddenChainPass({ defaultStyle: { color: "#000000", width: 1 } }),
-    //)
+      const svgMeshes: SVGMesh[] = []
+      modelCopy.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          svgMeshes.push(new SVGMesh(child))
+        }
+      })
 
-    svgRenderer
-      .generateSVG(svgMeshes, camera, {
+      const svgRenderer = new SVGRenderer()
+      svgRenderer.addPass(new FillPass())
+      svgRenderer.addPass(
+        new VisibleChainPass({ defaultStyle: { color: "#000000", width: 1 } }),
+      )
+      //svgRenderer.addPass(
+      //  new HiddenChainPass({ defaultStyle: { color: "#000000", width: 1 } }),
+      //)
+
+      const svgElement = await svgRenderer.generateSVG(svgMeshes, camera, {
         w: container.clientWidth,
         h: container.clientHeight,
       })
-      .then((svg) => {
-        const blob = new Blob([svg.svg()], {
-          type: "image/svg+xml;charset=utf-8",
-        })
-        const link = document.createElement("a")
-        const url = URL.createObjectURL(blob)
-        link.href = url
-        link.download = "scene.svg"
-        link.click()
-        URL.revokeObjectURL(url)
+      svg = svgElement.svg()
+    } catch (error) {
+      console.warn("Reverting to fallback SVG renderer: ", error)
+
+      svg = await generateVisibleEdgesSVG(scene, camera, {
+        width: container.clientWidth,
+        height: container.clientHeight,
+        lineColor: "#000000",
+        lineWidth: 1,
+        edgeThreshold: 1,
+        depthTestSamples: 2,
+        depthBias: 1e-4,
       })
+    }
+    if (!svg) {
+      console.error("Failed to generate SVG with both renderers")
+    }
+
+    const blob = new Blob([svg], {
+      type: "image/svg+xml;charset=utf-8",
+    })
+    const dataUrl = URL.createObjectURL(blob)
+    downloadImage(dataUrl, "scene.svg")
   }
 
   gizmo.visible = true
@@ -545,8 +587,9 @@ onMount(() => {
   async function init() {
     if (!container) return
 
-    const width = container.clientWidth
-    const height = container.clientHeight
+    let width = container.clientWidth
+    let height = container.clientHeight
+    let aspect = width / height
 
     renderer = new THREE.WebGLRenderer({ antialias: true })
     renderer.setSize(width, height)
@@ -563,10 +606,35 @@ onMount(() => {
     scene.background = new THREE.Color(0x222222)
 
     // camera
-    camera = new THREE.PerspectiveCamera(50, width / height, 0.01, 1000)
+    const perspectiveCamera = new THREE.PerspectiveCamera(
+      50,
+      aspect,
+      0.01,
+      1000,
+    )
+
+    const frustumSize = 5
+    const orthographicCamera = new THREE.OrthographicCamera(
+      (frustumSize * aspect) / -2,
+      (frustumSize * aspect) / 2,
+      frustumSize / 2,
+      frustumSize / -2,
+      0.01,
+      1000,
+    )
+    orthographicCamera.position.set(2, 2, 2)
+    orthographicCamera.lookAt(0, 0, 0)
+    orthographicCamera.zoom = 1
+    orthographicCamera.updateProjectionMatrix()
+
+    camera =
+      viewParams.camera === "Perspective"
+        ? perspectiveCamera
+        : orthographicCamera
+
     camera.position.set(2, 2, 2)
 
-    setupComposer(container, scene, camera)
+    setupComposer()
 
     // lights
     globalLight = new THREE.RectAreaLight(
@@ -639,7 +707,7 @@ onMount(() => {
 
     const sceneFolder = gui.addFolder("Scene")
     sceneFolder
-      .add(sceneParams, "globalLight", 0, 3, 0.1)
+      .add(sceneParams, "globalLight", 0.0, 5.0, 0.1)
       .name("Global Light")
       .onChange((value: number) => {
         globalLight.intensity = value
@@ -696,7 +764,7 @@ onMount(() => {
       })
 
     sceneFolder
-      .add(sceneParams, "surfaceRoughness", 0, 1, 0.01)
+      .add(sceneParams, "surfaceRoughness", 0.0, 1.0, 0.01)
       .name("Surface roughness")
       .onChange((value: number) => {
         globalSurfaceMaterial.roughness = value
@@ -705,7 +773,7 @@ onMount(() => {
       })
 
     sceneFolder
-      .add(sceneParams, "surfaceMetalness", 0, 1, 0.01)
+      .add(sceneParams, "surfaceMetalness", 0.0, 1.0, 0.01)
       .name("Surface metalness")
       .onChange((value: number) => {
         globalSurfaceMaterial.metalness = value
@@ -779,6 +847,37 @@ onMount(() => {
       })
 
     toolsFolder
+      .add(viewParams, "camera", ["Perspective", "Orthographic"])
+      .name("Camera")
+      .onChange((mode: string) => {
+        if (!container) return
+
+        const oldPosition = camera.position.clone()
+        const oldTarget = controls.target.clone()
+
+        camera = mode === "Perspective" ? perspectiveCamera : orthographicCamera
+
+        camera.position.copy(oldPosition)
+        camera.updateProjectionMatrix()
+
+        controls.object = camera
+        controls.target.copy(oldTarget)
+        controls.update()
+
+        gizmo.camera = camera
+        gizmo.update()
+
+        if (composer.passes.length > 0) {
+          const renderPass = composer.passes[0] as RenderPass
+          renderPass.camera = camera
+        }
+
+        if (pathTracer && viewParams.renderMode === "Path Tracer") {
+          pathTracer.updateCamera()
+        }
+      })
+
+    toolsFolder
       .add(viewParams, "texturesEnabled")
       .name("Textures")
       .onChange(updateMaterials)
@@ -816,19 +915,29 @@ onMount(() => {
     resize = () => {
       if (!container) return
 
-      const w = container.clientWidth
-      const h = container.clientHeight
-      camera.aspect = w / h
+      width = container.clientWidth
+      height = container.clientHeight
+      aspect = width / height
+
+      if (camera instanceof THREE.PerspectiveCamera) {
+        camera.aspect = aspect
+      } else {
+        orthographicCamera.left = (-frustumSize * aspect) / 2
+        orthographicCamera.right = (frustumSize * aspect) / 2
+        orthographicCamera.top = frustumSize / 2
+        orthographicCamera.bottom = -frustumSize / 2
+      }
+
       camera.updateProjectionMatrix()
-      renderer.setSize(w, h)
-      composer.setSize(w, h)
+      renderer.setSize(width, height)
+      composer.setSize(width, height)
       if (pathTracer) {
         pathTracer.updateCamera()
       }
       if (sobelPass) {
         const pixelRatio = Math.min(window.devicePixelRatio, 2)
-        sobelPass.uniforms.resolution.value.x = w * pixelRatio
-        sobelPass.uniforms.resolution.value.y = h * pixelRatio
+        sobelPass.uniforms.resolution.value.x = width * pixelRatio
+        sobelPass.uniforms.resolution.value.y = height * pixelRatio
       }
       gizmo.update()
     }
@@ -897,16 +1006,16 @@ onMount(() => {
   </header>
   <ProgressBar 
     value={progress}
-    visible={loadingProgress} 
+    visible={loadingProgress}
     top="calc(100% - 0.5rem)"
     left="0"
     barWidth="100%"
     barHeight="0.5rem"
   />
   <Spinner 
-    visible={loadingSpinner}
-    size="2rem"
-    top="calc(100% - 2.5rem)"
+    visible={loadingProgress}
+    size="1rem"
+    top="calc(100% - 2rem)"
     left="0.5rem"
   />
 

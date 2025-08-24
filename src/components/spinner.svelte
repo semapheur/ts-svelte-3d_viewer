@@ -7,9 +7,7 @@ export let left = "0px"
 </script>
 
 {#if visible}
-<div class="overlay">
   <div class="spinner" style="--size:{size}; --color:{color}; top:{top}; left:{left}"></div>
-</div>
 {/if}
 
 <style>
@@ -20,6 +18,7 @@ export let left = "0px"
     width: var(--size);
     height: var(--size);
     position: absolute;
+    z-index: 99;
     animation: spin 1s linear infinite;
   }
 

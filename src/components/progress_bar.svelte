@@ -48,7 +48,7 @@ $effect(() => {
   .progress-container {
     position: absolute;
     background: rgba(255, 255, 255, 0.1);
-    z-index: 1000;
+    z-index: 99;
     overflow: hidden;
   }
 

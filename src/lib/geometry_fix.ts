@@ -1,12 +1,12 @@
 import * as THREE from "three"
 
-type MeshData = {
+interface MeshData {
   mesh: THREE.Mesh
   name: string
   originalGeometry: THREE.BufferGeometry
 }
 
-type GeometryAnalysis = {
+interface GeometryAnalysis {
   vertices: number
   faces: number
   duplicateVertices: number
@@ -16,27 +16,28 @@ type GeometryAnalysis = {
   meshIndex?: number
 }
 
-type TotalStats = {
+interface TotalStats {
   meshes: number
   vertices: number
   faces: number
   duplicateVertices: number
   looseVertices: number
   nonManifoldEdges: number
+  totalIssues?: number
 }
 
-type AnalysisResult = {
+interface AnalysisResult {
   totalStats: TotalStats
   meshAnalysis: GeometryAnalysis[]
 }
 
-type RepairOptions = {
+interface RepairOptions {
   mergeTolerance?: number
   onProgress?: (percent: number, operation: string) => void
   skipOperations?: string[]
 }
 
-type RepairOperation = {
+interface RepairOperation {
   name: string
   fn: () => number | Promise<number>
 }
@@ -115,6 +116,8 @@ export class GeometryRepairer {
       totalStats.duplicateVertices +
       totalStats.looseVertices +
       totalStats.nonManifoldEdges
+
+    totalStats.totalIssues = totalIssues
     console.log(
       `Total analysis: ${totalStats.meshes} meshes, ${totalStats.vertices} vertices, ${totalStats.faces} faces, ${totalIssues} issues`,
     )
