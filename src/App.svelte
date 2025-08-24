@@ -8,7 +8,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js"
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js"
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js"
 import { SobelOperatorShader } from "three/addons/shaders/SobelOperatorShader.js"
-import { PhysicalSpotLight, WebGLPathTracer } from "three-gpu-pathtracer"
+import { WebGLPathTracer } from "three-gpu-pathtracer"
 import { ParallelMeshBVHWorker } from "three-mesh-bvh/src/workers/ParallelMeshBVHWorker.js"
 import {
   FillPass,
@@ -19,11 +19,13 @@ import {
 } from "three-svg-renderer"
 import { type GizmoOptions, ViewportGizmo } from "three-viewport-gizmo"
 import ProgressBar from "./components/progress_bar.svelte"
+import Spinner from "./components/spinner.svelte"
 import { GeometryRepairer } from "./lib/geometry_fix"
 
 let container: HTMLDivElement | null = null
 let progress = $state(0)
-let loading = $state(false)
+let loadingProgress = $state(false)
+let loadingSpinner = $state(false)
 
 let renderer: THREE.WebGLRenderer
 let pathTracer: WebGLPathTracer
@@ -37,8 +39,8 @@ let loader: GLTFLoader
 let currentModel: THREE.Object3D | null = null
 
 let globalLight: THREE.RectAreaLight
-let spotLight: PhysicalSpotLight
-let spotLightHelper: THREE.SpotLightHelper
+let spotLight: THREE.SpotLight
+//let spotLightHelper: THREE.SpotLightHelper
 let grid: THREE.GridHelper
 let globalSurface: THREE.Mesh
 let globalSurfaceMaterial: THREE.MeshStandardMaterial
@@ -241,10 +243,13 @@ async function normalizeAndAddModel(model: THREE.Object3D) {
   scene.add(model)
 
   await setPathTracerScene()
+  //if (viewParams.renderMode === "Path Tracer") {
+  //  pathTracer.setScene(scene, camera)
+  //}
 }
 
 async function setPathTracerScene() {
-  loading = true
+  loadingProgress = true
   progress = 0
   await pathTracer.setSceneAsync(scene, camera, {
     onProgress: (v: number) => {
@@ -254,7 +259,7 @@ async function setPathTracerScene() {
 
   progress = 100
   setTimeout(() => {
-    loading = false
+    loadingProgress = false
     progress = 0
   }, 500)
 }
@@ -445,141 +450,6 @@ function setupComposer(
   composer.addPass(sobelPass)
 }
 
-async function renderWithAccumulation(
-  renderer: THREE.WebGLRenderer,
-  scene: THREE.Scene,
-  camera: THREE.Camera,
-  passes: number = 16,
-  resolutionMultiplier: number = 2,
-): Promise<string> {
-  // Create a higher quality render target for ray tracing
-  const renderTarget = new THREE.WebGLRenderTarget(
-    renderer.domElement.width * resolutionMultiplier,
-    renderer.domElement.height * resolutionMultiplier,
-    {
-      minFilter: THREE.LinearFilter,
-      magFilter: THREE.LinearFilter,
-      format: THREE.RGBAFormat,
-      samples: 8, // Multi-sampling for anti-aliasing
-    },
-  )
-
-  // Save current renderer settings
-  const originalShadowMap = renderer.shadowMap.enabled
-  const originalShadowMapType = renderer.shadowMap.type
-  const originalToneMapping = renderer.toneMapping
-  const originalExposure = renderer.toneMappingExposure
-
-  // Enable advanced rendering features for ray-traced quality
-  renderer.shadowMap.enabled = true
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap
-  renderer.toneMapping = THREE.ACESFilmicToneMapping
-  renderer.toneMappingExposure = 1.2
-
-  // Create temporary camera for high-quality rendering
-  const tempCamera = camera.clone()
-
-  let accumBuffer = new THREE.WebGLRenderTarget(
-    renderTarget.width,
-    renderTarget.height,
-    { format: THREE.RGBAFormat, type: THREE.FloatType },
-  )
-
-  // Accumulation shader for progressive ray tracing simulation
-  const accumMaterial = new THREE.ShaderMaterial({
-    uniforms: {
-      tDiffuse: { value: null },
-      tAccum: { value: null },
-      frame: { value: 0 },
-      opacity: { value: 1.0 / passes },
-    },
-    vertexShader: `
-      varying vec2 vUv;
-      void main() {
-        vUv = uv;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: `
-      uniform sampler2D tDiffuse;
-      uniform sampler2D tAccum;
-      uniform float frame;
-      uniform float opacity;
-      varying vec2 vUv;
-      
-      void main() {
-        vec4 texel = texture2D(tDiffuse, vUv);
-        vec4 accum = texture2D(tAccum, vUv);
-        
-        if (frame < 0.5) {
-          gl_FragColor = texel;
-        } else {
-          gl_FragColor = mix(accum, texel, opacity);
-        }
-      }
-    `,
-  })
-
-  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), accumMaterial)
-  const accumScene = new THREE.Scene()
-  accumScene.add(quad)
-  const accumCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
-
-  // Progressive rendering loop
-  for (let i = 0; i < passes; i++) {
-    // Add slight camera jitter for anti-aliasing (simulates ray sampling)
-    tempCamera.position.x = camera.position.x + (Math.random() - 0.5) * 0.001
-    tempCamera.position.y = camera.position.y + (Math.random() - 0.5) * 0.001
-    tempCamera.position.z = camera.position.z + (Math.random() - 0.5) * 0.001
-    tempCamera.lookAt(camera.getWorldDirection(new THREE.Vector3()))
-
-    // Render main scene
-    renderer.setRenderTarget(renderTarget)
-    renderer.render(scene, tempCamera)
-
-    // Accumulate the result
-    accumMaterial.uniforms.tDiffuse.value = renderTarget.texture
-    accumMaterial.uniforms.tAccum.value = accumBuffer.texture
-    accumMaterial.uniforms.frame.value = i
-
-    const tempTarget = accumBuffer.clone()
-    renderer.setRenderTarget(tempTarget)
-    renderer.render(accumScene, accumCamera)
-
-    // Swap buffers
-    accumBuffer.dispose()
-    accumBuffer = tempTarget
-
-    // Allow UI to update
-    if (i % 4 === 0) {
-      await new Promise((resolve) => setTimeout(resolve, 1))
-    }
-  }
-
-  // Final render to canvas
-  renderer.setRenderTarget(null)
-  accumMaterial.uniforms.tDiffuse.value = accumBuffer.texture
-  accumMaterial.uniforms.frame.value = -1 // Just copy the accumulated result
-  renderer.render(accumScene, accumCamera)
-
-  // Get the high-quality image data
-  const dataURL = renderer.domElement.toDataURL("image/png", 1.0)
-
-  // Restore original renderer settings
-  renderer.shadowMap.enabled = originalShadowMap
-  renderer.shadowMap.type = originalShadowMapType
-  renderer.toneMapping = originalToneMapping
-  renderer.toneMappingExposure = originalExposure
-
-  // Clean up
-  renderTarget.dispose()
-  accumBuffer.dispose()
-  accumMaterial.dispose()
-  quad.geometry.dispose()
-
-  return dataURL
-}
-
 function downloadImage(dataURL: string, filename: string = "image.png") {
   const link = document.createElement("a")
   link.href = dataURL
@@ -709,7 +579,7 @@ onMount(() => {
     globalLight.lookAt(0, 0, 0)
     scene.add(globalLight)
 
-    spotLight = new PhysicalSpotLight(0xffffff, 1000)
+    spotLight = new THREE.SpotLight(0xffffff, 1000)
     spotLight.position.setFromSpherical(
       new THREE.Spherical(
         spotLightParams.distance,
@@ -820,6 +690,9 @@ onMount(() => {
       .onChange(async (value: boolean) => {
         globalSurface.visible = value
         await setPathTracerScene()
+        //if (viewParams.renderMode === "Path Tracer") {
+        //  pathTracer.setScene(scene, camera)
+        //}
       })
 
     sceneFolder
@@ -900,6 +773,7 @@ onMount(() => {
           controls.removeEventListener("change", pathTracerControlListener)
         } else if (mode === "Path Tracer") {
           pathTracer.reset()
+          //pathTracer.setScene(scene, camera)
           controls.addEventListener("change", pathTracerControlListener)
         }
       })
@@ -968,9 +842,14 @@ onMount(() => {
       if (viewParams.renderMode === "Raster" || viewParams.lineMode) {
         composer.render()
       } else if (viewParams.renderMode === "Path Tracer") {
-        pathTracer.renderSample()
-        progress = pathTracer.samples
-        loading = pathTracer.isCompiling
+        if (pathTracer.isCompiling) {
+          composer.render()
+          progress = pathTracer.samples
+          loadingSpinner = true
+        } else {
+          loadingSpinner = false
+          pathTracer.renderSample()
+        }
       }
       gizmo.render()
       rafId = requestAnimationFrame(animate)
@@ -1018,11 +897,17 @@ onMount(() => {
   </header>
   <ProgressBar 
     value={progress}
-    visible={loading} 
+    visible={loadingProgress} 
     top="calc(100% - 0.5rem)"
     left="0"
     barWidth="100%"
     barHeight="0.5rem"
+  />
+  <Spinner 
+    visible={loadingSpinner}
+    size="2rem"
+    top="calc(100% - 2.5rem)"
+    left="0.5rem"
   />
 
   <div bind:this={container} class="viewer"></div>
@@ -1048,6 +933,7 @@ onMount(() => {
     height: 100vh;
     display: flex;
     flex-direction: column;
+    position: relative;
     background: #222;
   }
 

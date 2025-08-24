@@ -5,7 +5,13 @@ import { viteSingleFile } from "vite-plugin-singlefile"
 // https://vite.dev/config/
 export default defineConfig({
   base: "./",
-  plugins: [svelte(), viteSingleFile()],
+  plugins: [
+    svelte(),
+    viteSingleFile({
+      inlinePattern: ["**/*.js", "**/*.css", "**/*.worker.js"],
+      removeViteModuleLoader: true,
+    }),
+  ],
   build: {
     rollupOptions: {
       output: {
