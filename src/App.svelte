@@ -12,7 +12,6 @@ import { WebGLPathTracer } from "three-gpu-pathtracer"
 import { ParallelMeshBVHWorker } from "three-mesh-bvh/src/workers/ParallelMeshBVHWorker.js"
 import {
   FillPass,
-  //HiddenChainPass,
   SVGMesh,
   SVGRenderer,
   VisibleChainPass,
@@ -267,9 +266,6 @@ async function normalizeAndAddModel(model: THREE.Object3D) {
   scene.add(model)
 
   await setPathTracerScene()
-  //if (viewParams.renderMode === "Path Tracer") {
-  //  pathTracer.setScene(scene, camera)
-  //}
 }
 
 async function setPathTracerScene() {
@@ -451,12 +447,8 @@ async function onFileChange(event: Event) {
   await loadModelFromFile(input.files[0])
 }
 
-function setupComposer() {
+function setupComposer(width: number, height: number, pixelRatio: number) {
   if (!container) return
-
-  const width = container.clientWidth
-  const height = container.clientHeight
-  const pixelRatio = Math.min(window.devicePixelRatio, 2)
 
   composer = new EffectComposer(renderer)
   composer.setPixelRatio(pixelRatio)
@@ -478,7 +470,7 @@ function downloadImage(dataURL: string, filename: string = "image.png") {
   link.download = filename
   link.click()
 }
-
+// missing function in three.js
 ;(THREE.Triangle as any).getUV = (
   point: THREE.Vector3,
   p1: THREE.Vector3,
@@ -544,9 +536,6 @@ async function exportScene(format: "png" | "svg") {
       svgRenderer.addPass(
         new VisibleChainPass({ defaultStyle: { color: "#000000", width: 1 } }),
       )
-      //svgRenderer.addPass(
-      //  new HiddenChainPass({ defaultStyle: { color: "#000000", width: 1 } }),
-      //)
 
       const svgElement = await svgRenderer.generateSVG(svgMeshes, camera, {
         w: container.clientWidth,
@@ -567,7 +556,7 @@ async function exportScene(format: "png" | "svg") {
       })
     }
     if (!svg) {
-      console.error("Failed to generate SVG with both renderers")
+      throw new Error("Failed to generate SVG with both renderers")
     }
 
     const blob = new Blob([svg], {
@@ -590,10 +579,12 @@ onMount(() => {
     let width = container.clientWidth
     let height = container.clientHeight
     let aspect = width / height
+    const pixelRatio = Math.min(window.devicePixelRatio, 2)
 
+    // renderer
     renderer = new THREE.WebGLRenderer({ antialias: true })
     renderer.setSize(width, height)
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    renderer.setPixelRatio(pixelRatio)
     renderer.outputColorSpace = THREE.SRGBColorSpace
     renderer.toneMapping = THREE.ACESFilmicToneMapping
     renderer.toneMappingExposure = 1.0
@@ -622,8 +613,6 @@ onMount(() => {
       0.01,
       1000,
     )
-    orthographicCamera.position.set(2, 2, 2)
-    orthographicCamera.lookAt(0, 0, 0)
     orthographicCamera.zoom = 1
     orthographicCamera.updateProjectionMatrix()
 
@@ -634,7 +623,7 @@ onMount(() => {
 
     camera.position.set(2, 2, 2)
 
-    setupComposer()
+    setupComposer(width, height, pixelRatio)
 
     // lights
     globalLight = new THREE.RectAreaLight(
@@ -758,9 +747,6 @@ onMount(() => {
       .onChange(async (value: boolean) => {
         globalSurface.visible = value
         await setPathTracerScene()
-        //if (viewParams.renderMode === "Path Tracer") {
-        //  pathTracer.setScene(scene, camera)
-        //}
       })
 
     sceneFolder
@@ -841,7 +827,6 @@ onMount(() => {
           controls.removeEventListener("change", pathTracerControlListener)
         } else if (mode === "Path Tracer") {
           pathTracer.reset()
-          //pathTracer.setScene(scene, camera)
           controls.addEventListener("change", pathTracerControlListener)
         }
       })
@@ -849,7 +834,7 @@ onMount(() => {
     toolsFolder
       .add(viewParams, "camera", ["Perspective", "Orthographic"])
       .name("Camera")
-      .onChange((mode: string) => {
+      .onChange(async (mode: string) => {
         if (!container) return
 
         const oldPosition = camera.position.clone()
@@ -873,7 +858,8 @@ onMount(() => {
         }
 
         if (pathTracer && viewParams.renderMode === "Path Tracer") {
-          pathTracer.updateCamera()
+          pathTracer.reset()
+          await setPathTracerScene()
         }
       })
 

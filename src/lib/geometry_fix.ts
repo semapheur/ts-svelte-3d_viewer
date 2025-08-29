@@ -42,7 +42,7 @@ interface RepairOperation {
   fn: () => number | Promise<number>
 }
 
-type RepairResults = {
+interface RepairResults {
   repairs: Record<string, number>
   finalAnalysis: AnalysisResult
 }
@@ -524,8 +524,6 @@ export class GeometryRepairer {
       if (onProgress) {
         onProgress(((i + 1) / operations.length) * 100, operation.name)
       }
-
-      await this.delay(100)
     }
 
     console.log("Complete geometry repair finished!")
@@ -571,12 +569,57 @@ export class GeometryRepairer {
     mesh.geometry = newGeometry
   }
 
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms))
+  public removeMeshesWithIssues(
+    object3D: THREE.Object3D,
+    options: {
+      maxDuplicateVertices?: number
+      maxLooseVertices?: number
+      maxNonManifoldEdges?: number
+    } = {},
+  ): number {
+    const {
+      maxDuplicateVertices = 0,
+      maxLooseVertices = 0,
+      maxNonManifoldEdges = 0,
+    } = options
+
+    // Analyze first
+    this.analyzeGeometry(object3D)
+    let removedCount = 0
+
+    this.analysisResults.forEach((result, index) => {
+      const hasTooManyIssues =
+        result.duplicateVertices > maxDuplicateVertices ||
+        result.looseVertices > maxLooseVertices ||
+        result.nonManifoldEdges > maxNonManifoldEdges
+
+      if (hasTooManyIssues) {
+        const mesh = this.meshes[index].mesh
+        const parent = mesh.parent
+        object3D.remove(mesh)
+        mesh.geometry.dispose()
+        removedCount++
+        console.log(
+          `Removed mesh "${result.meshName}" (Index: ${result.meshIndex}) due to excessive issues.`,
+        )
+
+        // Clean up empty parent objects
+        this.removeEmptyParents(parent)
+      }
+    })
+
+    console.log(`Removed ${removedCount} mesh(es) with excessive issues.`)
+    return removedCount
   }
 
-  public getMeshes(): readonly MeshData[] {
-    return Object.freeze([...this.meshes])
+  private removeEmptyParents(object: THREE.Object3D | null): void {
+    if (!object || !(object instanceof THREE.Object3D)) return
+    if (object.children.length === 0 && object.parent) {
+      const parent = object.parent
+      parent.remove(object)
+      console.log(`Removed empty parent object: ${object.name || "(unnamed)"}`)
+      this.removeEmptyParents(parent) // keep climbing up
+    }
   }
 
   public getAnalysisResults(): readonly GeometryAnalysis[] {

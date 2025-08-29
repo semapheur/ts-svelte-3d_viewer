@@ -7,19 +7,19 @@ export default defineConfig({
   base: "./",
   plugins: [
     svelte(),
-    viteSingleFile({
-      inlinePattern: ["**/*.js", "**/*.css", "**/*.worker.js"],
-      removeViteModuleLoader: true,
-    }),
+    //viteSingleFile({
+    //  inlinePattern: ["**/*.js", "**/*.css", "**/*.worker.js"],
+    //  removeViteModuleLoader: true,
+    //}),
   ],
-  build: {
-    rollupOptions: {
-      output: {
-        manualChunks: undefined,
-      },
-    },
-    cssCodeSplit: false,
-  },
+  //build: {
+  //  rollupOptions: {
+  //    output: {
+  //      manualChunks: undefined,
+  //    },
+  //  },
+  //  cssCodeSplit: false,
+  //},
   optimizeDeps: {
     exclude: ["three-mesh-bvh"],
   },
