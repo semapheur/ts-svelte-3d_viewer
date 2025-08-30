@@ -1,6 +1,7 @@
 <script lang="ts">
 import { GUI } from "lil-gui"
 import { onMount } from "svelte"
+import { render } from "svelte/server"
 import * as THREE from "three"
 import { OrbitControls } from "three/addons/controls/OrbitControls.js"
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js"
@@ -26,6 +27,7 @@ let container: HTMLDivElement | null = null
 let progress = $state(0)
 let loadingProgress = $state(false)
 let loadingSpinner = $state(false)
+let resolutionScale = $state(1)
 
 let renderer: THREE.WebGLRenderer
 let pathTracer: WebGLPathTracer
@@ -491,80 +493,107 @@ function downloadImage(dataURL: string, filename: string = "image.png") {
   return target
 }
 
-async function exportScene(format: "png" | "svg") {
+async function exportSceneToPng(resolutionScale: number | null) {
+  if (!container || !currentModel || !resolutionScale) return
+
+  gizmo.visible = false
+
+  if (viewParams.renderMode === "Path Tracer") {
+    pathTracer.renderSample()
+    const dataURL = renderer.domElement.toDataURL("image/png", 1.0)
+    downloadImage(dataURL, "scene.png")
+    gizmo.visible = false
+    return
+  }
+
+  const needsUpdate = resolutionScale !== 1
+
+  const originalWidth = renderer.domElement.width
+  const originalHeight = renderer.domElement.height
+  const clientWidth = container.clientWidth
+  const clientHeight = container.clientHeight
+
+  if (needsUpdate) {
+    const exportWidth = clientWidth * resolutionScale
+    const exportHeight = clientHeight * resolutionScale
+
+    renderer.setSize(exportWidth, exportHeight, false)
+    composer.setSize(exportWidth, exportHeight)
+  }
+
+  composer.render()
+  const dataURL = renderer.domElement.toDataURL("image/png", 1.0)
+  downloadImage(dataURL, "scene.png")
+
+  if (needsUpdate) {
+    renderer.setSize(originalWidth, originalHeight, false)
+    composer.setSize(originalWidth, originalHeight)
+  }
+
+  gizmo.visible = true
+}
+
+async function exportSceneToSvg() {
   if (!container || !currentModel) return
 
   gizmo.visible = false
 
-  if (format === "png") {
-    if (viewParams.renderMode === "Raster" || viewParams.lineMode) {
-      composer.render()
-    } else if (viewParams.renderMode === "Path Tracer") {
-      pathTracer.renderSample()
-    }
+  let svg = ""
 
-    const dataURL = renderer.domElement.toDataURL("image/png", 1.0)
-    downloadImage(dataURL, "scene.png")
-  }
-
-  if (format === "svg") {
-    let svg = ""
-
-    try {
-      const repairer = new GeometryRepairer()
-      const modelCopy = currentModel.clone(true)
-      const results = await repairer.repairGeometry(modelCopy, {
-        mergeTolerance: 1e-5,
-      })
-
-      const totalIssues = results.finalAnalysis.totalStats.totalIssues
-      if (totalIssues !== undefined && totalIssues > 0) {
-        throw new Error(
-          "Model has issues preventing SVG export using 'three-svg-renderer'",
-        )
-      }
-
-      const svgMeshes: SVGMesh[] = []
-      modelCopy.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          svgMeshes.push(new SVGMesh(child))
-        }
-      })
-
-      const svgRenderer = new SVGRenderer()
-      svgRenderer.addPass(new FillPass())
-      svgRenderer.addPass(
-        new VisibleChainPass({ defaultStyle: { color: "#000000", width: 1 } }),
-      )
-
-      const svgElement = await svgRenderer.generateSVG(svgMeshes, camera, {
-        w: container.clientWidth,
-        h: container.clientHeight,
-      })
-      svg = svgElement.svg()
-    } catch (error) {
-      console.warn("Reverting to fallback SVG renderer: ", error)
-
-      svg = await generateVisibleEdgesSVG(scene, camera, {
-        width: container.clientWidth,
-        height: container.clientHeight,
-        lineColor: "#000000",
-        lineWidth: 1,
-        edgeThreshold: 1,
-        depthTestSamples: 2,
-        depthBias: 1e-4,
-      })
-    }
-    if (!svg) {
-      throw new Error("Failed to generate SVG with both renderers")
-    }
-
-    const blob = new Blob([svg], {
-      type: "image/svg+xml;charset=utf-8",
+  try {
+    const repairer = new GeometryRepairer()
+    const modelCopy = currentModel.clone(true)
+    const results = await repairer.repairGeometry(modelCopy, {
+      mergeTolerance: 1e-5,
     })
-    const dataUrl = URL.createObjectURL(blob)
-    downloadImage(dataUrl, "scene.svg")
+
+    const totalIssues = results.finalAnalysis.totalStats.totalIssues
+    if (totalIssues !== undefined && totalIssues > 0) {
+      throw new Error(
+        "Model has issues preventing SVG export using 'three-svg-renderer'",
+      )
+    }
+
+    const svgMeshes: SVGMesh[] = []
+    modelCopy.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        svgMeshes.push(new SVGMesh(child))
+      }
+    })
+
+    const svgRenderer = new SVGRenderer()
+    svgRenderer.addPass(new FillPass())
+    svgRenderer.addPass(
+      new VisibleChainPass({ defaultStyle: { color: "#000000", width: 1 } }),
+    )
+
+    const svgElement = await svgRenderer.generateSVG(svgMeshes, camera, {
+      w: container.clientWidth,
+      h: container.clientHeight,
+    })
+    svg = svgElement.svg()
+  } catch (error) {
+    console.warn("Reverting to fallback SVG renderer: ", error)
+
+    svg = await generateVisibleEdgesSVG(scene, camera, {
+      width: container.clientWidth,
+      height: container.clientHeight,
+      lineColor: "#000000",
+      lineWidth: 1,
+      edgeThreshold: 1,
+      depthTestSamples: 2,
+      depthBias: 1e-4,
+    })
   }
+  if (!svg) {
+    throw new Error("Failed to generate SVG with both renderers")
+  }
+
+  const blob = new Blob([svg], {
+    type: "image/svg+xml;charset=utf-8",
+  })
+  const dataUrl = URL.createObjectURL(blob)
+  downloadImage(dataUrl, "scene.svg")
 
   gizmo.visible = true
 }
@@ -898,7 +927,7 @@ onMount(() => {
         })
       })
 
-    resize = () => {
+    resize = async () => {
       if (!container) return
 
       width = container.clientWidth
@@ -918,7 +947,7 @@ onMount(() => {
       renderer.setSize(width, height)
       composer.setSize(width, height)
       if (pathTracer) {
-        pathTracer.updateCamera()
+        await setPathTracerScene()
       }
       if (sobelPass) {
         const pixelRatio = Math.min(window.devicePixelRatio, 2)
@@ -981,14 +1010,18 @@ onMount(() => {
 
 <div class="container">
   <header class="header">
-    <label style="margin: 1rem; color: #eee;">
-      Load .glb Model:
-      <input type="file" accept=".glb" onchange={onFileChange} style="margin-left: 1rem;" />
-    </label>
-    <div>
-      <button onclick={() => exportScene("png")}>Export PNG</button>
-      <button onclick={() => exportScene("svg")}>Export SVG</button>
-    </div>
+    <fieldset>
+      <legend>Load Model</legend>
+      <input type="file" accept=".glb" onchange={onFileChange} />
+    </fieldset>
+    <fieldset class="export">
+      <legend>Export</legend>
+      <div class="export-png">
+        <input type="number" min="1" max="4" step="1" bind:value={resolutionScale} />
+        <button onclick={() => exportSceneToPng(resolutionScale)}>PNG</button>
+      </div>
+      <button onclick={() => exportSceneToSvg()}>SVG</button>
+    </fieldset>
   </header>
   <ProgressBar 
     value={progress}
@@ -1009,27 +1042,63 @@ onMount(() => {
 </div>
 
 <style>
+  :global(:root) {
+    --color-bg: #111;
+    --color-bg-container: #222;
+    --color-text: #eee;
+    --color-border: #555;
+    --color-border-hover: #777;
+    --color-bg-button: #333;
+    --color-bg-button-hover: #444;
+    --color-bg-button-active: #555;
+    --border-radius: 4px;
+    --padding-button: 0.4rem 0.8rem;
+  }
+  
   :global(body) {
-    margin: 0;
-    background: #111;
-    color: #eee;
-    font-family: system-ui, sans-serif;
-    overflow: hidden;
+    background: var(--color-bg);
+    color: var(--color-text);
+  }
+
+  :global(fieldset) {
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    padding: 0.2rem;
+  }
+
+  :global(legend) {
+    font-size: 0.8rem;
+  }
+
+  :global(button) {
+    background: var(--color-bg-button);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    padding: var(--padding-button);
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+  }
+
+  :global(button:hover) {
+    background: var(--color-bg-button-hover);
+    border-color: var(--color-border-hover);
   }
 
   .header {
     display: flex;
     justify-content: start;
     align-items: center;
+    padding: 0 0.2rem 0.2rem 0.2rem;
   }
 
   .container {
-    width: 100vw;
-    height: 100vh;
+    width: 100%;
+    height: 100%;
     display: flex;
     flex-direction: column;
     position: relative;
-    background: #222;
+    background: var(--color-bg-container);
   }
 
   .viewer {
@@ -1037,12 +1106,30 @@ onMount(() => {
     position: relative;
   }
 
+  .export {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .export-png {
+    display: flex;
+    align-items: stretch;
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+
+    & input, button {
+      border: none;
+      border-radius: 0;
+    }
+
+  }
+
   input[type="file"] {
     cursor: pointer;
-    background: #333;
-    border-radius: 4px;
-    padding: 0.3rem 0.6rem;
-    color: #eee;
-    border: none;
+    background: var(--color-bg-button);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    padding: 0.2rem 0.6rem;
+    color: var(--color-text);
   }
 </style>
