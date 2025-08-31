@@ -1,7 +1,6 @@
 <script lang="ts">
 import { GUI } from "lil-gui"
 import { onMount } from "svelte"
-import { render } from "svelte/server"
 import * as THREE from "three"
 import { OrbitControls } from "three/addons/controls/OrbitControls.js"
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js"
@@ -9,6 +8,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js"
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js"
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js"
 import { SobelOperatorShader } from "three/addons/shaders/SobelOperatorShader.js"
+import { depth } from "three/tsl"
 import { WebGLPathTracer } from "three-gpu-pathtracer"
 import { ParallelMeshBVHWorker } from "three-mesh-bvh/src/workers/ParallelMeshBVHWorker.js"
 import {
@@ -42,7 +42,7 @@ let currentModel: THREE.Object3D | null = null
 
 let globalLight: THREE.RectAreaLight
 let spotLight: THREE.SpotLight
-//let spotLightHelper: THREE.SpotLightHelper
+let spotLightHelper: THREE.SpotLightHelper
 let grid: THREE.GridHelper
 let globalSurface: THREE.Mesh
 let globalSurfaceMaterial: THREE.MeshStandardMaterial
@@ -65,7 +65,8 @@ const sceneParams = {
 }
 
 const spotLightParams = {
-  intensity: 100,
+  showHelper: false,
+  intensity: 500,
   distance: 10,
   azimuth: 45,
   polar: 45,
@@ -198,11 +199,10 @@ async function loadModelFromFile(file: File) {
       async (gltf) => {
         currentModel = gltf.scene || gltf.scenes?.[0] || null
         if (!currentModel) return
-        storeOriginalMaps(currentModel)
-        storeOriginalMaterialState(currentModel)
+
+        processMaterials(currentModel)
         await normalizeAndAddModel(currentModel)
         updateMaterials()
-        setModelShadows(currentModel, viewParams.shadows)
         focusOnObject(currentModel)
         addBoundingBoxAndLabels(currentModel)
       },
@@ -212,6 +212,67 @@ async function loadModelFromFile(file: File) {
     )
   }
   reader.readAsArrayBuffer(file)
+}
+
+function setModelShadows(model: THREE.Object3D, enabled: boolean) {
+  model.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      child.castShadow = enabled
+      child.receiveShadow = enabled
+    }
+  })
+}
+
+function processMaterials(object: THREE.Object3D) {
+  const maxAnisotropy = renderer.capabilities.getMaxAnisotropy()
+
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return
+
+    child.castShadow = true
+    child.receiveShadow = true
+
+    const materials = Array.isArray(child.material)
+      ? child.material
+      : [child.material]
+
+    materials.forEach((material: THREE.Material) => {
+      if (!(material instanceof THREE.MeshStandardMaterial)) return
+
+      if (material.map) {
+        material.depthWrite = true
+        material.depthTest = true
+
+        material.userData.original = {
+          map: material.map,
+          transparent: material.transparent,
+          opacity: material.opacity,
+          depthWrite: material.depthWrite,
+          depthTest: material.depthTest,
+        }
+      }
+
+      if (renderer.capabilities.isWebGL2) {
+        material.alphaToCoverage = true
+      }
+
+      ;[
+        material.map,
+        material.normalMap,
+        material.roughnessMap,
+        material.metalnessMap,
+        material.aoMap,
+      ].forEach((tex) => {
+        if (tex) {
+          tex.anisotropy = maxAnisotropy
+          tex.minFilter = THREE.LinearMipmapLinearFilter
+          tex.magFilter = THREE.LinearFilter
+        }
+      })
+
+      material.needsUpdate = true
+    })
+  })
 }
 
 function focusOnObject(object: THREE.Object3D) {
@@ -286,66 +347,27 @@ async function setPathTracerScene() {
   }, 500)
 }
 
-function storeOriginalMaps(obj: THREE.Object3D) {
-  obj.traverse((child) => {
-    if (child instanceof THREE.Mesh && child.material) {
-      const materials = Array.isArray(child.material)
-        ? child.material
-        : [child.material]
-      materials.forEach((material: THREE.Material) => {
-        if ("map" in material && material.map)
-          material.userData.originalMap = material.map
-      })
-    }
-  })
-}
-
-function storeOriginalMaterialState(object: THREE.Object3D) {
-  object.traverse((child) => {
-    if (child instanceof THREE.Mesh) {
-      const materials = Array.isArray(child.material)
-        ? child.material
-        : [child.material]
-
-      materials.forEach((material: THREE.Material) => {
-        material.userData.original = {
-          transparent: material.transparent,
-          opacity: material.opacity,
-          depthTest: material.depthTest,
-          depthWrite: material.depthWrite,
-        }
-      })
-    }
-  })
-}
-
 function updateMaterials() {
   if (!currentModel) return
   currentModel.traverse((child) => {
-    if (child instanceof THREE.Mesh && child.material) {
-      const materials = Array.isArray(child.material)
-        ? child.material
-        : [child.material]
-      materials.forEach((material: THREE.Material) => {
-        if ("map" in material) {
-          material.map = viewParams.texturesEnabled
-            ? material.userData.originalMap || null
-            : null
-          material.needsUpdate = true
-        }
-      })
-    }
+    if (!(child instanceof THREE.Mesh)) return
+
+    const materials = Array.isArray(child.material)
+      ? child.material
+      : [child.material]
+
+    materials.forEach((material: THREE.Material) => {
+      if (!(material instanceof THREE.MeshStandardMaterial)) return
+
+      if (material.map) {
+        material.map = viewParams.texturesEnabled
+          ? material.userData.original.map || null
+          : null
+        material.needsUpdate = true
+      }
+    })
   })
   pathTracer.updateMaterials()
-}
-
-function setModelShadows(model: THREE.Object3D, enabled: boolean) {
-  model.traverse((child) => {
-    if (child instanceof THREE.Mesh) {
-      child.castShadow = enabled
-      child.receiveShadow = enabled
-    }
-  })
 }
 
 function updateLabelPositions() {
@@ -408,6 +430,8 @@ function toggleXray(enabled: boolean) {
   const internalKeywords = ["root", "roll", "bone"] // /x_root_\d+_0/
 
   currentModel.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return
+
     if (child instanceof THREE.Mesh && child.material) {
       const materials = Array.isArray(child.material)
         ? child.material
@@ -665,25 +689,32 @@ onMount(() => {
     globalLight.lookAt(0, 0, 0)
     scene.add(globalLight)
 
-    spotLight = new THREE.SpotLight(0xffffff, 1000)
+    spotLight = new THREE.SpotLight(0xffffff, spotLightParams.intensity)
     spotLight.position.setFromSpherical(
       new THREE.Spherical(
         spotLightParams.distance,
-        spotLightParams.polar,
-        spotLightParams.azimuth,
+        THREE.MathUtils.degToRad(spotLightParams.polar),
+        THREE.MathUtils.degToRad(spotLightParams.azimuth),
       ),
     )
 
     spotLight.castShadow = true
-    spotLight.shadow.mapSize.set(2048, 2048)
-    spotLight.shadow.camera.near = 0.1
-    spotLight.shadow.camera.far = 50
+    spotLight.shadow.mapSize.set(2 ** 12, 2 ** 12)
+    spotLight.shadow.camera.near = 0.5
+    spotLight.shadow.camera.far = 100
+    spotLight.shadow.camera.fov = 30
     spotLight.shadow.focus = 1.0
+    spotLight.shadow.bias = 0.0001
+    spotLight.shadow.normalBias = 0.05
+    spotLight.shadow.radius = 10 // Softer shadow edges
+    spotLight.shadow.blurSamples = 16 // Smoother shadow transitions
     scene.add(spotLight)
 
-    //spotLightHelper = new THREE.SpotLightHelper(spotLight, 0xffffff)
-    //scene.add(spotLightHelper)
-
+    //const shadowHelper = new THREE.CameraHelper(spotLight.shadow.camera)
+    //scene.add(shadowHelper)
+    spotLightHelper = new THREE.SpotLightHelper(spotLight, 0xffffff)
+    scene.add(spotLightHelper)
+    spotLightHelper.visible = spotLightParams.showHelper
     // grid
     grid = new THREE.GridHelper(10, 20, 0x444444, 0x111111)
     scene.add(grid)
@@ -812,10 +843,11 @@ onMount(() => {
       .onChange((value: number) => {
         const spherical = new THREE.Spherical(
           value,
-          spotLightParams.azimuth,
-          spotLightParams.polar,
+          THREE.MathUtils.degToRad(spotLightParams.polar),
+          THREE.MathUtils.degToRad(spotLightParams.azimuth),
         )
         spotLight.position.setFromSpherical(spherical)
+        spotLightHelper.update()
         pathTracer.updateLights()
       })
 
@@ -825,10 +857,11 @@ onMount(() => {
       .onChange((value: number) => {
         const spherical = new THREE.Spherical(
           spotLightParams.distance,
-          spotLightParams.polar,
+          THREE.MathUtils.degToRad(spotLightParams.polar),
           THREE.MathUtils.degToRad(value),
         )
         spotLight.position.setFromSpherical(spherical)
+        spotLightHelper.update()
         pathTracer.updateLights()
       })
 
@@ -839,10 +872,18 @@ onMount(() => {
         const spherical = new THREE.Spherical(
           spotLightParams.distance,
           THREE.MathUtils.degToRad(value),
-          spotLightParams.azimuth,
+          THREE.MathUtils.degToRad(spotLightParams.azimuth),
         )
         spotLight.position.setFromSpherical(spherical)
+        spotLightHelper.update()
         pathTracer.updateLights()
+      })
+
+    spotLightFolder
+      .add(spotLightParams, "showHelper")
+      .name("Show Helper")
+      .onChange((value: boolean) => {
+        spotLightHelper.visible = value
       })
 
     const toolsFolder = gui.addFolder("Tools")
@@ -900,30 +941,30 @@ onMount(() => {
     toolsFolder
       .add(viewParams, "xray")
       .name("X-Ray View")
-      .onChange((v: boolean) => {
-        toggleXray(v)
+      .onChange((value: boolean) => {
+        toggleXray(value)
       })
     toolsFolder
       .add(viewParams, "lineMode")
       .name("Line Mode")
-      .onChange((v: boolean) => {
-        if (sobelPass) sobelPass.enabled = v
+      .onChange((value: boolean) => {
+        if (sobelPass) sobelPass.enabled = value
       })
     toolsFolder
       .add(viewParams, "shadows")
       .name("Shadows")
-      .onChange((v: boolean) => {
-        renderer.shadowMap.enabled = v
-        if (currentModel) setModelShadows(currentModel, v)
-        globalSurface.receiveShadow = v
+      .onChange((value: boolean) => {
+        renderer.shadowMap.enabled = value
+        if (currentModel) setModelShadows(currentModel, value)
+        globalSurface.receiveShadow = value
       })
     toolsFolder
       .add(bboxParams, "showBoundingBox")
       .name("Show Bounding Box")
-      .onChange((v: boolean) => {
-        if (boundingBoxHelper) boundingBoxHelper.visible = v
+      .onChange((value: boolean) => {
+        if (boundingBoxHelper) boundingBoxHelper.visible = value
         dimensionLabels.forEach((l) => {
-          l.visible = v
+          l.visible = value
         })
       })
 
