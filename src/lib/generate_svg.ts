@@ -4,30 +4,41 @@ import { acceleratedRaycast, MeshBVH } from "three-mesh-bvh"
 // Patch Mesh raycast for BVH acceleration
 THREE.Mesh.prototype.raycast = acceleratedRaycast
 
+interface Options {
+  maxEdgeLength?: number
+  edgeThreshold?: number
+  lineColor?: string
+  lineWidth?: number
+  depthTestSamples?: number
+  depthBias?: number
+  width: number
+  height: number
+  fullWidth?: number
+  fullHeight?: number
+  offsetX?: number
+  offsetY?: number
+}
+
 export async function generateVisibleEdgesSVG(
   sceneRoot: THREE.Object3D,
   camera: THREE.Camera,
-  {
-    maxEdgeLength = Infinity,
-    edgeThreshold = 1,
+  options: Options,
+): Promise<string> {
+  const {
+    maxEdgeLength = 1,
+    edgeThreshold = 0.1,
     lineColor = "#000000",
     lineWidth = 1,
-    width = 1024,
-    height = 1024,
-    depthTestSamples = 3,
-    depthBias = 1e-4,
-  }: {
-    maxEdgeLength?: number
-    edgeThreshold?: number
-    lineColor?: string
-    lineWidth?: number
-    width?: number
-    height?: number
-    depthTestSamples?: number
-    depthBias?: number
-    silhouetteOnly?: boolean
-  } = {},
-): Promise<string> {
+    depthTestSamples = 1,
+    depthBias = 0,
+    width,
+    height,
+    fullWidth = width,
+    fullHeight = height,
+    offsetX = 0,
+    offsetY = 0,
+  } = options
+
   const meshes: THREE.Mesh[] = []
   sceneRoot.traverse((child) => {
     if ((child as any).isMesh && child.visible) {
@@ -54,9 +65,12 @@ export async function generateVisibleEdgesSVG(
   // Project 3D point to screen coordinates
   const projectToScreen = (point: THREE.Vector3) => {
     const projected = point.clone().project(camera)
+    const fullX = (projected.x * 0.5 + 0.5) * fullWidth
+    const fullY = (1 - (projected.y * 0.5 + 0.5)) * fullHeight
+
     return {
-      x: (projected.x * 0.5 + 0.5) * width,
-      y: (1 - (projected.y * 0.5 + 0.5)) * height,
+      x: fullX - offsetX,
+      y: fullY - offsetY,
       z: projected.z,
       inFrustum:
         projected.z >= -1 &&

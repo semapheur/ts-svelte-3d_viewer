@@ -8,7 +8,6 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js"
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js"
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js"
 import { SobelOperatorShader } from "three/addons/shaders/SobelOperatorShader.js"
-import { depth } from "three/tsl"
 import { WebGLPathTracer } from "three-gpu-pathtracer"
 import { ParallelMeshBVHWorker } from "three-mesh-bvh/src/workers/ParallelMeshBVHWorker.js"
 import {
@@ -237,7 +236,9 @@ function processMaterials(object: THREE.Object3D) {
       : [child.material]
 
     materials.forEach((material: THREE.Material) => {
-      if (!(material instanceof THREE.MeshStandardMaterial)) return
+      if (!(material instanceof THREE.MeshStandardMaterial)) {
+        return
+      }
 
       if (material.map) {
         material.depthWrite = true
@@ -357,14 +358,20 @@ function updateMaterials() {
       : [child.material]
 
     materials.forEach((material: THREE.Material) => {
-      if (!(material instanceof THREE.MeshStandardMaterial)) return
+      if (
+        !(material instanceof THREE.MeshStandardMaterial) ||
+        !("map" in material) ||
+        !("original" in material.userData)
+      )
+        return
 
-      if (material.map) {
-        material.map = viewParams.texturesEnabled
-          ? material.userData.original.map || null
-          : null
-        material.needsUpdate = true
+      if (!material.userData.original) {
+        console.log(material.map)
       }
+      material.map = viewParams.texturesEnabled
+        ? material.userData.original.map || null
+        : null
+      material.needsUpdate = true
     })
   })
   pathTracer.updateMaterials()
@@ -557,12 +564,60 @@ async function exportSceneToPng(resolutionScale: number | null) {
   gizmo.visible = true
 }
 
+interface ViewBox {
+  minX: number
+  minY: number
+  width: number
+  height: number
+}
+
+function boundingSvgSize(
+  container: HTMLElement,
+  camera: THREE.Camera,
+  model: THREE.Object3D,
+): ViewBox {
+  const box = new THREE.Box3().setFromObject(model)
+
+  // Project bounding box corners to screen space to find SVG dimensions
+  const corners = [
+    new THREE.Vector3(box.min.x, box.min.y, box.min.z),
+    new THREE.Vector3(box.min.x, box.min.y, box.max.z),
+    new THREE.Vector3(box.min.x, box.max.y, box.min.z),
+    new THREE.Vector3(box.min.x, box.max.y, box.max.z),
+    new THREE.Vector3(box.max.x, box.min.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.min.y, box.max.z),
+    new THREE.Vector3(box.max.x, box.max.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.max.y, box.max.z),
+  ]
+
+  // Project corners to screen coordinates
+  const projectedCorners = corners.map((corner) => {
+    const projected = corner.clone().project(camera)
+    return {
+      x: ((projected.x + 1) * container.clientWidth) / 2,
+      y: ((-projected.y + 1) * container.clientHeight) / 2,
+    }
+  })
+
+  // Find bounding rectangle in screen space
+  const minX = Math.min(...projectedCorners.map((p) => p.x))
+  const maxX = Math.max(...projectedCorners.map((p) => p.x))
+  const minY = Math.min(...projectedCorners.map((p) => p.y))
+  const maxY = Math.max(...projectedCorners.map((p) => p.y))
+
+  const svgWidth = Math.ceil(maxX - minX)
+  const svgHeight = Math.ceil(maxY - minY)
+
+  return { minX: minX, minY: minY, width: svgWidth, height: svgHeight }
+}
+
 async function exportSceneToSvg() {
   if (!container || !currentModel) return
 
   gizmo.visible = false
 
   let svg = ""
+  const viewBox = boundingSvgSize(container, camera, currentModel)
 
   try {
     const repairer = new GeometryRepairer()
@@ -592,16 +647,20 @@ async function exportSceneToSvg() {
     )
 
     const svgElement = await svgRenderer.generateSVG(svgMeshes, camera, {
-      w: container.clientWidth,
-      h: container.clientHeight,
+      w: viewBox.width,
+      h: viewBox.height,
     })
     svg = svgElement.svg()
   } catch (error) {
     console.warn("Reverting to fallback SVG renderer: ", error)
 
     svg = await generateVisibleEdgesSVG(scene, camera, {
-      width: container.clientWidth,
-      height: container.clientHeight,
+      width: viewBox.width,
+      height: viewBox.height,
+      fullWidth: container.clientWidth,
+      fullHeight: container.clientHeight,
+      offsetX: viewBox.minX,
+      offsetY: viewBox.minY,
       lineColor: "#000000",
       lineWidth: 1,
       edgeThreshold: 1,
@@ -612,6 +671,11 @@ async function exportSceneToSvg() {
   if (!svg) {
     throw new Error("Failed to generate SVG with both renderers")
   }
+
+  //svg = svg.replace(
+  //  /viewBox="[^"]*"/,
+  //  `viewBox="${viewBox.minX} ${viewBox.minY} ${viewBox.width} ${viewBox.height}"`,
+  //)
 
   const blob = new Blob([svg], {
     type: "image/svg+xml;charset=utf-8",
@@ -1035,13 +1099,14 @@ onMount(() => {
       gui.destroy()
       gui = null
     }
+    if (pathTracer && typeof pathTracer.dispose === "function") {
+      pathTracer.dispose()
+    }
+
     if (renderer) {
       renderer.forceContextLoss()
       renderer.domElement?.remove()
       renderer.dispose()
-    }
-    if (pathTracer && typeof pathTracer.dispose === "function") {
-      pathTracer.dispose()
     }
     if (composer) composer.dispose()
     if (currentModel) disposeModel(currentModel)

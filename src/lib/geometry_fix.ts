@@ -12,6 +12,9 @@ interface GeometryAnalysis {
   duplicateVertices: number
   looseVertices: number
   nonManifoldEdges: number
+  nonManifoldVertices: number
+  degenerateFaces: number
+  boundaryEdges: number
   meshName?: string
   meshIndex?: number
 }
@@ -23,6 +26,9 @@ interface TotalStats {
   duplicateVertices: number
   looseVertices: number
   nonManifoldEdges: number
+  nonManifoldVertices: number
+  degenerateFaces: number
+  boundaryEdges: number
   totalIssues?: number
 }
 
@@ -35,6 +41,7 @@ interface RepairOptions {
   mergeTolerance?: number
   onProgress?: (percent: number, operation: string) => void
   skipOperations?: string[]
+  ensureManifold?: boolean
 }
 
 interface RepairOperation {
@@ -92,6 +99,9 @@ export class GeometryRepairer {
       duplicateVertices: 0,
       looseVertices: 0,
       nonManifoldEdges: 0,
+      nonManifoldVertices: 0,
+      degenerateFaces: 0,
+      boundaryEdges: 0,
     }
 
     this.meshes.forEach((meshData: MeshData, index: number) => {
@@ -106,16 +116,28 @@ export class GeometryRepairer {
       totalStats.duplicateVertices += analysis.duplicateVertices
       totalStats.looseVertices += analysis.looseVertices
       totalStats.nonManifoldEdges += analysis.nonManifoldEdges
+      totalStats.nonManifoldVertices += analysis.nonManifoldVertices || 0
+      totalStats.degenerateFaces += analysis.degenerateFaces || 0
+      totalStats.boundaryEdges += analysis.boundaryEdges || 0
+
+      const meshIssues =
+        (analysis.duplicateVertices || 0) +
+        (analysis.looseVertices || 0) +
+        (analysis.nonManifoldEdges || 0) +
+        (analysis.nonManifoldVertices || 0) +
+        (analysis.degenerateFaces || 0)
 
       console.log(
-        `${meshData.name}: ${analysis.vertices}v, ${analysis.faces}f, ${analysis.duplicateVertices + analysis.looseVertices + analysis.nonManifoldEdges} issues`,
+        `${meshData.name}: ${analysis.vertices}v, ${analysis.faces}f, ${meshIssues} issues`,
       )
     })
 
     const totalIssues =
       totalStats.duplicateVertices +
       totalStats.looseVertices +
-      totalStats.nonManifoldEdges
+      totalStats.nonManifoldEdges +
+      totalStats.nonManifoldVertices +
+      totalStats.degenerateFaces
 
     totalStats.totalIssues = totalIssues
     console.log(
@@ -140,47 +162,210 @@ export class GeometryRepairer {
       duplicateVertices: 0,
       looseVertices: 0,
       nonManifoldEdges: 0,
+      nonManifoldVertices: 0,
+      degenerateFaces: 0,
+      boundaryEdges: 0,
     }
 
-    const vertexMap = new Map<string, number>()
-    const tolerance = 0.000001
-
-    for (let i = 0; i < positions.length; i += 3) {
-      const key = `${Math.round(positions[i] / tolerance) * tolerance},${Math.round(positions[i + 1] / tolerance) * tolerance},${Math.round(positions[i + 2] / tolerance) * tolerance}`
-      if (vertexMap.has(key)) {
-        analysis.duplicateVertices++
-      } else {
-        vertexMap.set(key, i / 3)
-      }
-    }
+    // Fast duplicate vertex detection using spatial hashing
+    analysis.duplicateVertices = this.countDuplicateVerticesFast(positions)
 
     if (indices) {
-      const edges = new Map<string, number>()
+      // Single-pass analysis for optimal performance
+      const edgeCount = new Map<number, number>()
       const vertexFaceCount = new Array<number>(analysis.vertices).fill(0)
+      const vertexEdgeSet = new Array<Set<number>>(analysis.vertices)
 
+      // Initialize vertex edge sets
+      for (let i = 0; i < analysis.vertices; i++) {
+        vertexEdgeSet[i] = new Set()
+      }
+
+      // Single pass through faces
       for (let i = 0; i < indices.length; i += 3) {
-        const face = [indices[i], indices[i + 1], indices[i + 2]]
+        const a = indices[i],
+          b = indices[i + 1],
+          c = indices[i + 2]
+
+        // Quick degenerate face check
+        if (a === b || b === c || c === a) {
+          analysis.degenerateFaces++
+          continue
+        }
+
+        // Check for zero-area faces (simplified)
+        if (this.isZeroAreaFace(positions, a, b, c)) {
+          analysis.degenerateFaces++
+          continue
+        }
+
+        // Count valid faces
+        vertexFaceCount[a]++
+        vertexFaceCount[b]++
+        vertexFaceCount[c]++
+
+        // Process edges using numeric keys for performance
+        const edges = [
+          this.getEdgeKey(a, b),
+          this.getEdgeKey(b, c),
+          this.getEdgeKey(c, a),
+        ]
 
         for (let j = 0; j < 3; j++) {
-          vertexFaceCount[face[j]]++
+          const edgeKey = edges[j]
+          const count = edgeCount.get(edgeKey) || 0
+          edgeCount.set(edgeKey, count + 1)
 
-          const v1 = face[j]
-          const v2 = face[(j + 1) % 3]
-          const edgeKey = v1 < v2 ? `${v1}-${v2}` : `${v2}-${v1}`
-
-          edges.set(edgeKey, (edges.get(edgeKey) || 0) + 1)
+          // Track vertex connectivity
+          const [v1, v2] = this.decodeEdgeKey(edgeKey)
+          vertexEdgeSet[v1].add(v2)
+          vertexEdgeSet[v2].add(v1)
         }
       }
 
-      for (const count of edges.values()) {
-        if (count > 2) analysis.nonManifoldEdges++
+      // Analyze edge manifoldness in single pass
+      let boundaryEdgeCount = 0
+      for (const count of edgeCount.values()) {
+        if (count === 1) {
+          boundaryEdgeCount++
+        } else if (count > 2) {
+          analysis.nonManifoldEdges++
+        }
       }
-      analysis.looseVertices = vertexFaceCount.filter(
-        (count) => count === 0,
-      ).length
+      analysis.boundaryEdges = boundaryEdgeCount
+
+      // Fast vertex analysis
+      for (let i = 0; i < analysis.vertices; i++) {
+        if (vertexFaceCount[i] === 0) {
+          analysis.looseVertices++
+        } else {
+          // Simplified non-manifold vertex detection
+          const expectedEdges = vertexFaceCount[i]
+          const actualEdges = vertexEdgeSet[i].size
+          if (actualEdges > expectedEdges + 1) {
+            analysis.nonManifoldVertices++
+          }
+        }
+      }
     }
 
     return analysis
+  }
+
+  private countDuplicateVerticesFast(positions: Float32Array): number {
+    const tolerance = 0.000001
+    const scale = 1 / tolerance
+    const vertexSet = new Set<number>()
+    let duplicates = 0
+
+    for (let i = 0; i < positions.length; i += 3) {
+      // Use a single number as hash key for better performance
+      const x = Math.round(positions[i] * scale)
+      const y = Math.round(positions[i + 1] * scale)
+      const z = Math.round(positions[i + 2] * scale)
+
+      // Combine coordinates into single hash
+      const hash = (x * 73856093) ^ (y * 19349663) ^ (z * 83492791)
+
+      if (vertexSet.has(hash)) {
+        duplicates++
+      } else {
+        vertexSet.add(hash)
+      }
+    }
+
+    return duplicates
+  }
+
+  private isZeroAreaFace(
+    positions: Float32Array,
+    a: number,
+    b: number,
+    c: number,
+  ): boolean {
+    const tolerance = 0.000001
+
+    // Get vertex positions
+    const ax = positions[a * 3],
+      ay = positions[a * 3 + 1],
+      az = positions[a * 3 + 2]
+    const bx = positions[b * 3],
+      by = positions[b * 3 + 1],
+      bz = positions[b * 3 + 2]
+    const cx = positions[c * 3],
+      cy = positions[c * 3 + 1],
+      cz = positions[c * 3 + 2]
+
+    // Calculate cross product of two edges
+    const abx = bx - ax,
+      aby = by - ay,
+      abz = bz - az
+    const acx = cx - ax,
+      acy = cy - ay,
+      acz = cz - az
+
+    const crossX = aby * acz - abz * acy
+    const crossY = abz * acx - abx * acz
+    const crossZ = abx * acy - aby * acx
+
+    // Check if cross product length is below tolerance
+    const lengthSq = crossX * crossX + crossY * crossY + crossZ * crossZ
+    return lengthSq < tolerance * tolerance
+  }
+
+  private getEdgeKey(a: number, b: number): number {
+    // Use Cantor pairing function for unique edge keys
+    const min = Math.min(a, b)
+    const max = Math.max(a, b)
+    return ((min + max) * (min + max + 1)) / 2 + max
+  }
+
+  private decodeEdgeKey(key: number): [number, number] {
+    // Reverse Cantor pairing (simplified for our use case)
+    const w = Math.floor((Math.sqrt(8 * key + 1) - 1) / 2)
+    const t = (w * w + w) / 2
+    const max = key - t
+    const min = w - max
+    return [min, max]
+  }
+
+  public validateManifoldGeometry(object3D: THREE.Object3D): boolean {
+    const analysis = this.analyzeGeometry(object3D)
+
+    // Check if geometry is suitable for SVG rendering
+    const hasIssues =
+      analysis.totalStats.nonManifoldEdges > 0 ||
+      analysis.totalStats.nonManifoldVertices > 0 ||
+      analysis.totalStats.degenerateFaces > 0 ||
+      analysis.totalStats.looseVertices > 0
+
+    if (hasIssues) {
+      console.warn(
+        "Geometry has manifold issues that may cause SVG rendering problems:",
+        {
+          nonManifoldEdges: analysis.totalStats.nonManifoldEdges,
+          nonManifoldVertices: analysis.totalStats.nonManifoldVertices,
+          degenerateFaces: analysis.totalStats.degenerateFaces,
+          looseVertices: analysis.totalStats.looseVertices,
+        },
+      )
+      return false
+    }
+
+    console.log("Geometry validation passed - suitable for SVG rendering")
+    return true
+  }
+
+  public ensureManifoldGeometry(
+    object3D: THREE.Object3D,
+  ): Promise<RepairResults> {
+    console.log("Ensuring manifold geometry for SVG compatibility...")
+
+    return this.repairGeometry(object3D, {
+      mergeTolerance: 0.000001,
+      skipOperations: [], // Don't skip any operations
+      ensureManifold: true, // New option for stricter manifold enforcement
+    })
   }
 
   public mergeVertices(
@@ -419,18 +604,48 @@ export class GeometryRepairer {
       return 0
     }
 
+    const positions = geometry.attributes.position.array as Float32Array
     const newIndices: number[] = []
     let removed = 0
+    const tolerance = 0.000001
 
     for (let i = 0; i < indices.length; i += 3) {
       const a = indices[i],
         b = indices[i + 1],
         c = indices[i + 2]
+
       // Skip faces where any two indices are the same
       if (a === b || b === c || c === a) {
         removed++
         continue
       }
+
+      // Check for zero-area faces (collinear vertices)
+      const v1 = new THREE.Vector3(
+        positions[a * 3],
+        positions[a * 3 + 1],
+        positions[a * 3 + 2],
+      )
+      const v2 = new THREE.Vector3(
+        positions[b * 3],
+        positions[b * 3 + 1],
+        positions[b * 3 + 2],
+      )
+      const v3 = new THREE.Vector3(
+        positions[c * 3],
+        positions[c * 3 + 1],
+        positions[c * 3 + 2],
+      )
+
+      const edge1 = v2.clone().sub(v1)
+      const edge2 = v3.clone().sub(v1)
+      const cross = edge1.cross(edge2)
+
+      if (cross.length() < tolerance) {
+        removed++
+        continue
+      }
+
       newIndices.push(a, b, c)
     }
 
@@ -478,13 +693,14 @@ export class GeometryRepairer {
       mergeTolerance = 0.000001,
       onProgress = null,
       skipOperations = [],
+      ensureManifold = false,
     } = options
 
     console.log("Starting complete geometry repair process...")
 
     this.extractMeshes(object3D)
 
-    const operations: RepairOperation[] = [
+    let operations: RepairOperation[] = [
       {
         name: "mergeVertices",
         fn: () => this.mergeVertices(object3D, mergeTolerance),
@@ -506,6 +722,16 @@ export class GeometryRepairer {
         fn: () => this.recalculateNormals(object3D),
       },
     ]
+
+    if (ensureManifold) {
+      operations = [
+        ...operations,
+        {
+          name: "validateAndReRepair",
+          fn: () => this.performIterativeRepair(object3D, mergeTolerance),
+        },
+      ]
+    }
 
     const results: Record<string, number> = {}
 
@@ -534,6 +760,35 @@ export class GeometryRepairer {
       repairs: results,
       finalAnalysis,
     }
+  }
+
+  private performIterativeRepair(
+    object3D: THREE.Object3D,
+    tolerance: number,
+  ): number {
+    let totalIterations = 0
+    const maxIterations = 3
+
+    for (let iteration = 0; iteration < maxIterations; iteration++) {
+      const analysis = this.analyzeGeometry(object3D)
+      const hasIssues =
+        analysis.totalStats.nonManifoldEdges > 0 ||
+        analysis.totalStats.nonManifoldVertices > 0 ||
+        analysis.totalStats.degenerateFaces > 0
+
+      if (!hasIssues) {
+        console.log(`Geometry is manifold after ${iteration} iterations`)
+        break
+      }
+
+      console.log(`Iteration ${iteration + 1}: fixing remaining issues...`)
+      this.removeDegenerateFaces(object3D)
+      this.mergeVertices(object3D, tolerance)
+      this.fixNonManifoldEdges(object3D)
+      totalIterations++
+    }
+
+    return totalIterations
   }
 
   private updateMeshGeometry(
@@ -575,12 +830,16 @@ export class GeometryRepairer {
       maxDuplicateVertices?: number
       maxLooseVertices?: number
       maxNonManifoldEdges?: number
+      maxNonManifoldVertices?: number
+      maxDegenerateFaces?: number
     } = {},
   ): number {
     const {
       maxDuplicateVertices = 0,
       maxLooseVertices = 0,
       maxNonManifoldEdges = 0,
+      maxNonManifoldVertices = 0,
+      maxDegenerateFaces = 0,
     } = options
 
     // Analyze first
@@ -589,9 +848,11 @@ export class GeometryRepairer {
 
     this.analysisResults.forEach((result, index) => {
       const hasTooManyIssues =
-        result.duplicateVertices > maxDuplicateVertices ||
-        result.looseVertices > maxLooseVertices ||
-        result.nonManifoldEdges > maxNonManifoldEdges
+        (result.duplicateVertices || 0) > maxDuplicateVertices ||
+        (result.looseVertices || 0) > maxLooseVertices ||
+        (result.nonManifoldEdges || 0) > maxNonManifoldEdges ||
+        (result.nonManifoldVertices || 0) > maxNonManifoldVertices ||
+        (result.degenerateFaces || 0) > maxDegenerateFaces
 
       if (hasTooManyIssues) {
         const mesh = this.meshes[index].mesh
