@@ -13,6 +13,7 @@ dist-ssr
 *.local
 public/models
 *.txt
+*.zip
 
 # Editor directories and files
 .mypy_cache

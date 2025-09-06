@@ -672,11 +672,6 @@ async function exportSceneToSvg() {
     throw new Error("Failed to generate SVG with both renderers")
   }
 
-  //svg = svg.replace(
-  //  /viewBox="[^"]*"/,
-  //  `viewBox="${viewBox.minX} ${viewBox.minY} ${viewBox.width} ${viewBox.height}"`,
-  //)
-
   const blob = new Blob([svg], {
     type: "image/svg+xml;charset=utf-8",
   })
