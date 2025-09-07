@@ -224,9 +224,18 @@ function setModelShadows(model: THREE.Object3D, enabled: boolean) {
 
 function processMaterials(object: THREE.Object3D) {
   const maxAnisotropy = renderer.capabilities.getMaxAnisotropy()
+  const allMeshes: THREE.Mesh[] = []
+
+  object.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      allMeshes.push(child)
+    }
+  })
 
   object.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return
+
+    child.userData.isInterior = isInteriorMesh(child, allMeshes)
 
     child.castShadow = true
     child.receiveShadow = true
@@ -274,6 +283,39 @@ function processMaterials(object: THREE.Object3D) {
       material.needsUpdate = true
     })
   })
+}
+
+function isInteriorMesh(
+  targetMesh: THREE.Mesh,
+  allMeshes: THREE.Mesh[],
+): boolean {
+  const targetBox = new THREE.Box3().setFromObject(targetMesh)
+  const targetCenter = targetBox.getCenter(new THREE.Vector3())
+
+  for (const mesh of allMeshes) {
+    if (mesh === targetMesh) continue
+
+    const meshBox = new THREE.Box3().setFromObject(mesh)
+
+    if (meshBox.containsBox(targetBox)) {
+      return true
+    }
+
+    if (isPointInsideMesh(targetCenter, mesh)) {
+      return true
+    }
+  }
+
+  return false
+}
+
+function isPointInsideMesh(point: THREE.Vector3, mesh: THREE.Mesh): boolean {
+  const raycaster = new THREE.Raycaster()
+  const direction = new THREE.Vector3(1, 0, 0)
+  raycaster.set(point, direction)
+  const intersects = raycaster.intersectObject(mesh, false)
+
+  return intersects.length % 2 === 1
 }
 
 function focusOnObject(object: THREE.Object3D) {
@@ -434,7 +476,7 @@ function updateGlobalSurfaceAndLight() {
 function toggleXray(enabled: boolean) {
   if (!currentModel) return
 
-  const internalKeywords = ["root", "roll", "bone"] // /x_root_\d+_0/
+  //const internalKeywords = ["root", "roll", "bone"] // /x_root_\d+_0/
 
   currentModel.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return
@@ -444,31 +486,32 @@ function toggleXray(enabled: boolean) {
         ? child.material
         : [child.material]
 
-      const isInternal = internalKeywords.some((keyword) =>
-        child.name.toLowerCase().includes(keyword),
-      )
+      const isInternal = child.userData.isInterior as boolean
+      //const isInternal = internalKeywords.some((keyword) =>
+      //  child.name.toLowerCase().includes(keyword),
+      //)
       //const isInternal = child.name.toLowerCase().match(internalPattern) !== null
 
       materials.forEach((material: THREE.Material) => {
-        if (isInternal) {
-          if (enabled) {
-            child.renderOrder = 2
-            material.depthTest = false
-            material.depthWrite = false
-            material.transparent = true
-            material.opacity = 0.8
-          } else {
-            const original = material.userData.original
-            if (original) {
-              material.transparent = original.transparent
-              material.opacity = original.opacity
-              material.depthTest = original.depthTest
-              material.depthWrite = original.depthWrite
-            }
-            child.renderOrder = 0
+        if (!isInternal) return
+
+        if (enabled) {
+          child.renderOrder = 2
+          material.depthTest = false
+          material.depthWrite = false
+          material.transparent = true
+          material.opacity = 0.8
+        } else {
+          const original = material.userData.original
+          if (original) {
+            material.transparent = original.transparent
+            material.opacity = original.opacity
+            material.depthTest = original.depthTest
+            material.depthWrite = original.depthWrite
           }
-          material.needsUpdate = true
+          child.renderOrder = 0
         }
+        material.needsUpdate = true
       })
     }
   })

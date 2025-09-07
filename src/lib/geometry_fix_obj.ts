@@ -1,5 +1,3 @@
-import { uv } from "three/tsl"
-
 interface Vertex {
   x: number
   y: number
@@ -20,7 +18,7 @@ interface MeshData {
   name?: string
 }
 
-interface RepairOptions {
+export interface RepairOptions {
   mergeTolerance?: number
   removeLooseVertices?: boolean
   removeDegenerateFaces?: boolean
@@ -29,7 +27,7 @@ interface RepairOptions {
   onProgress?: (progress: number, operation: string) => void
 }
 
-interface RepairResults {
+export interface RepairResults {
   mergedVertices: number
   removedLooseVertices: number
   removedDegenerateFaces: number
