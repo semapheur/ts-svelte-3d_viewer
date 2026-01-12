@@ -1,3 +1,9 @@
+<#
+Usage:
+  .\FileRenamer.ps1 -Action deextend -Path "path\to\target\directory"
+  .\FileRenamer.ps1 -Action reextend -Path "path\to\target\directory"
+#>
+
 param(
   [ValidateSet("deextend", "reextend")]
   [string]$Action,
@@ -10,7 +16,7 @@ function DeExtend-Files{
   param (
     [string]$RootPath
   )
-  
+
   $Extensions = @(
     ".bat"
     ".css",
@@ -25,9 +31,12 @@ function DeExtend-Files{
 
   Get-ChildItem -Path $RootPath -Recurse -File | ForEach-Object {
     $ext = $_.Extension.Trim().ToLower()
+    $isGz = $ext -eq ".gz"
 
-    if ($Extensions -contains $ext) {
-      $newName = "$($_.FullName).txt"
+    $checkExt = $isGz ? [System.IO.Path]::GetExtension($_.BaseName).ToLower() : $ext
+
+    if ($Extensions -contains $checkExt) {
+      $newName = $isGz ? "$($_.BaseName).txt.gz" : "$($_.FullName).txt"
       Write-Host "Renaming '$($_.FullName)' to '$newName'"
       Rename-Item -Path $_.FullName -NewName $newName
     }
@@ -46,9 +55,12 @@ function ReExtend-Files{
 
   Get-ChildItem -Path $RootPath -Recurse -File | ForEach-Object {
     $fileName = $_.Name
+    $isGz = ($_.Extension.Trim().ToLower() -eq ".gz")
+    
+    $baseName = $isGz ? $_.BaseName : $fileName
 
-    if ($fileName -match "^(.+)\.(.+)\.txt$") {
-      $newName = "$($matches[1]).$($matches[2])"
+    if ($baseName -match "^(.+)\.(.+)\.txt$") {
+      $newName = $isGz ? "$($matches[1]).$($matches[2]).gz" : "$($matches[1]).$($matches[2])"
       Write-Host "Renaming '$fileName' to '$newName'"
       Rename-Item -Path $_.FullName -NewName $newName
     }

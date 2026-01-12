@@ -151,4 +151,4 @@ export async function convertObjZipsToGlb(
   }
 }
 
-convertObjZipsToGlb("../models_obj", "../models_glb")
+convertObjZipsToGlb("../models_obj", "../models_glb_")
