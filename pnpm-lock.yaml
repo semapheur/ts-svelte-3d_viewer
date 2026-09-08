@@ -63,6 +63,9 @@ importers:
       vite:
         specifier: ^8.2.2
         version: 8.2.2(@types/node@24.13.3)
+      vite-plugin-glsl:
+        specifier: ^1.6.1
+        version: 1.6.1(vite@8.2.2(@types/node@24.13.3))
       vite-plugin-singlefile:
         specifier: ^2.3.0
         version: 2.3.3(vite@8.2.2(@types/node@24.13.3))
@@ -851,6 +854,19 @@ packages:
   urijs@1.19.11:
     resolution: {integrity: sha512-HXgFDgDommxn5/bIv0cnQZsPhHDA90NPHD6+c/v21U5+Sx5hoP8+dP9IZXBU1gIfvdRfhG8cel9QNPeionfcCQ==}
 
+  vite-plugin-glsl@1.6.1:
+    resolution: {integrity: sha512-0Ro2lUmDdwWkoAc+dhJ7fXO/2n6JthkzbCqW0/bvlU4R6kXjbpSqNJYfbIilFu9L/HApiXOZ8IExmlz59qzH8Q==}
+    engines: {node: '>= 20.17.0', npm: '>= 10.8.3'}
+    peerDependencies:
+      '@rollup/pluginutils': ^5.x
+      esbuild: '>= 0.25'
+      vite: '>= 3.x'
+    peerDependenciesMeta:
+      '@rollup/pluginutils':
+        optional: true
+      esbuild:
+        optional: true
+
   vite-plugin-singlefile@2.3.3:
     resolution: {integrity: sha512-XVnGH0QzbOa8fxRSsHdCarVN1BSBXNi7uLMQYlrGRN5apdHkk62XQWRJhVever0lnfuyBkwn+kvVChdm/OoOUg==}
     engines: {node: '>18.0.0'}
@@ -1592,6 +1608,10 @@ snapshots:
   universalify@2.0.1: {}
 
   urijs@1.19.11: {}
+
+  vite-plugin-glsl@1.6.1(vite@8.2.2(@types/node@24.13.3)):
+    dependencies:
+      vite: 8.2.2(@types/node@24.13.3)
 
   vite-plugin-singlefile@2.3.3(vite@8.2.2(@types/node@24.13.3)):
     dependencies:
