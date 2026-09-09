@@ -1,0 +1,79 @@
+import * as THREE from "three";
+
+export const SPEED_OF_LIGHT = 299792458;
+
+export type Polarization = "H" | "V";
+
+export interface PolarizationConfig {
+  tx: Polarization;
+  rx: Polarization;
+}
+
+export type ImagingMode = "stripmap" | "spotlight";
+
+export interface SarParams {
+  antennaSize_m: number;
+  chirpBandwith_Hz: number;
+  centerFrequency_Hz: number;
+  pulseRepetitionFrequency_Hz: number;
+  polarization: PolarizationConfig;
+  mode: ImagingMode;
+  platformSpeed_mps: number;
+  apertureDuration_s: number;
+  pulseDuration_s?: number;
+  rangeOversample?: number;
+  maxPulses?: number;
+  imageSize?: number;
+}
+
+export interface Scatterer {
+  position: THREE.Vector3;
+  normal: THREE.Vector3;
+  albedo: number;
+}
+
+export interface PlatformSample {
+  time: number;
+  position: THREE.Vector3;
+  boresight: THREE.Vector3;
+}
+
+export interface SarPassGeometryData {
+  samples: PlatformSample[];
+  sceneCenter: THREE.Vector3;
+  groundRangeAxis: THREE.Vector3;
+  azimuthAxis: THREE.Vector3;
+  incidenceAngle_rad: number;
+  slantRangeToCenter: number;
+  wavelength_m: number;
+}
+
+export interface SarImage {
+  width: number;
+  height: number;
+  data: Float32Array;
+  groundRangeExtent_m: number;
+  azimuthExtent_m: number;
+  min_dB: number;
+  max_dB: number;
+}
+
+export interface SarGeometryTransfer {
+  samples: {
+    time: number;
+    position: [number, number, number];
+    boresight: [number, number, number];
+  }[];
+  sceneCenter: [number, number, number];
+  groundRangeAxis: [number, number, number];
+  azimuthAxis: [number, number, number];
+  incidenceAngleRad: number;
+  slantRangeToCenter: number;
+  wavelength: number;
+}
+
+export interface SarScattererTransfer {
+  position: [number, number, number];
+  normal: [number, number, number];
+  albedo: number;
+}

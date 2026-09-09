@@ -52,7 +52,6 @@ export class ModelViewer {
   #pathTracer!: WebGLPathTracer;
   #composer!: EffectComposer;
   #sobelPass!: ShaderPass;
-  #sarPass!: ShaderPass;
   #scene!: THREE.Scene;
   #camera!: THREE.PerspectiveCamera | THREE.OrthographicCamera;
   #perspectiveCamera!: THREE.PerspectiveCamera;
@@ -102,22 +101,6 @@ export class ModelViewer {
     xray: false,
     lineMode: false,
     shadows: true,
-  };
-
-  #sarParams: SARParams = {
-    enabled: false,
-    centerFreqGHz: 9.6, // X-Band
-    bandwidthMHz: 300, // 300 MHz -> ~0.5m range resolution
-    prfHz: 1500,
-    polarization: "HH",
-    mode: "spotlight",
-    durationSec: 3.0,
-    speedMps: 150,
-    headingDeg: 45,
-    antennaLengthM: 1.5,
-    speckleLevel: 0.35,
-    dbMin: -30,
-    dbMax: 10,
   };
 
   #bboxParams = { showBoundingBox: false };
@@ -172,19 +155,6 @@ export class ModelViewer {
         ? this.#perspectiveCamera
         : this.#orthographicCamera;
     this.#camera.position.set(2, 2, 2);
-
-    this.#depthTarget = new THREE.WebGLRenderTarget(
-      width * pixelRatio,
-      height * pixelRatio,
-      {
-        minFilter: THREE.NearestFilter,
-        magFilter: THREE.NearestFilter,
-        depthTexture: new THREE.DepthTexture(
-          width * pixelRatio,
-          height * pixelRatio,
-        ),
-      },
-    );
 
     this.#setupComposer(width, height, pixelRatio);
     this.#setupLights();
@@ -285,66 +255,6 @@ export class ModelViewer {
     this.#sobelPass.uniforms.resolution.value.y = height * pixelRatio;
     this.#sobelPass.enabled = false;
     this.#composer.addPass(this.#sobelPass);
-
-    this.#sarPass = new ShaderPass(SARShader);
-    this.#sarPass.uniforms.u_resolution.value.set(
-      width * pixelRatio,
-      height * pixelRatio,
-    );
-    this.#sarPass.uniforms.t_depth.value = this.#depthTarget.depthTexture;
-    this.#sarPass.enabled = this.#sarParams.enabled;
-    this.#composer.addPass(this.#sarPass);
-  }
-
-  #updateSARPhysics() {
-    if (!this.#sarParams.enabled) return;
-
-    const SPEED_OF_LIGHT = 299792458;
-    const centerFreqHz = this.#sarParams.centerFreqGHz * 1e9;
-    const bandwithHz = this.#sarParams.bandwidthMHz * 1e6;
-
-    const wavelength = SPEED_OF_LIGHT / centerFreqHz;
-
-    const rangeResolution = SPEED_OF_LIGHT / (2 * bandwithHz);
-
-    const targetPos = this.#controls.target.clone();
-    const cameraPos = this.#camera.position.clone();
-
-    const headingRad = THREE.MathUtils.degToRad(this.#sarParams.headingDeg);
-    const flightDir = new THREE.Vector3(
-      Math.cos(headingRad),
-      0,
-      Math.sin(headingRad),
-    ).normalize();
-
-    let azimuthResolution: number;
-    const standoffDistance = cameraPos.distanceTo(targetPos);
-
-    if (this.#sarParams.mode === "stripmap") {
-      azimuthResolution = this.#sarParams.antennaLengthM / 2.0;
-    } else {
-      const syntheticApertureLength =
-        this.#sarParams.speedMps * this.#sarParams.durationSec;
-      azimuthResolution =
-        (wavelength * standoffDistance) /
-        (2.0 * Math.max(syntheticApertureLength, 0.1));
-    }
-
-    const polMap: Record<Polarization, number> = { HH: 0, VV: 1, HV: 2, VH: 3 };
-
-    const u = this.#sarPass.uniforms;
-    u.u_cameraNear.value = this.#camera.near;
-    u.u_cameraFar.value = this.#camera.far;
-    u.u_radarPos.value.copy(cameraPos);
-    u.u_targetPos.value.copy(targetPos);
-    u.u_flightDir.value.copy(flightDir);
-    u.u_wavelength.value = wavelength;
-    u.u_rangeRes.value = rangeResolution;
-    u.u_azimuthRes.value = azimuthResolution;
-    u.u_polarization.value = polMap[this.#sarParams.polarization];
-    u.u_speckleLevel.value = this.#sarParams.speckleLevel;
-    u.u_dbMin.value = this.#sarParams.dbMin;
-    u.u_dbMax.value = this.#sarParams.dbMax;
   }
 
   #setupGUI() {
@@ -512,52 +422,6 @@ export class ModelViewer {
         if (this.#boundingBoxHelper) this.#boundingBoxHelper.visible = value;
         this.#dimensionLabels.forEach((l) => (l.visible = value));
       });
-
-    const sarFolder = this.#gui.addFolder("SAR controls");
-    sarFolder
-      .add(this.#sarParams, "enabled")
-      .name("Enable SAR View")
-      .onChange((v: boolean) => {
-        this.#sarPass.enabled = v;
-      });
-
-    sarFolder
-      .add(this.#sarParams, "mode", ["spotlight", "stripmap"])
-      .name("SAR mode");
-
-    sarFolder
-      .add(this.#sarParams, "polarization", ["HH", "VV", "HV", "VH"])
-      .name("Polarization");
-
-    const waveFolder = sarFolder.addFolder("Radar waveform");
-    waveFolder
-      .add(this.#sarParams, "centerFreqGHz", 0.5, 40.0, 0.1)
-      .name("Frequency (GHz)");
-
-    waveFolder
-      .add(this.#sarParams, "bandwidthMHz", 10, 1000, 10)
-      .name("Bandwidth (MHz)");
-
-    const platformFolder = sarFolder.addFolder("Platform dynamics");
-    platformFolder
-      .add(this.#sarParams, "speedMps", 10, 1000, 10)
-      .name("Speed (m/s)");
-    platformFolder
-      .add(this.#sarParams, "durationSec", 0.5, 30.0, 0.5)
-      .name("Pass Duration (s)");
-    platformFolder
-      .add(this.#sarParams, "headingDeg", 0, 360, 1)
-      .name("Heading Angle (°)");
-    platformFolder
-      .add(this.#sarParams, "antennaLengthM", 0.1, 10.0, 0.1)
-      .name("Antenna Size (m)");
-
-    const visualFolder = sarFolder.addFolder("Processing");
-    visualFolder
-      .add(this.#sarParams, "speckleLevel", 0.0, 1.0, 0.05)
-      .name("Speckle Level");
-    visualFolder.add(this.#sarParams, "dbMin", -80, 0, 1).name("dB Floor");
-    visualFolder.add(this.#sarParams, "dbMax", 0, 40, 1).name("dB Ceiling");
   }
 
   #updateSpotLightSpherical() {
@@ -644,15 +508,6 @@ export class ModelViewer {
         this.loadingSpinner = false;
         this.#pathTracer.renderSample();
       }
-    }
-
-    if (this.#sarParams.enabled) {
-      this.#renderer.setRenderTarget(this.#depthTarget);
-      this.#renderer.render(this.#scene, this.#camera);
-      this.#renderer.setRenderTarget(null);
-
-      this.#updateSARPhysics();
-      this.#composer.render();
     }
 
     this.#gizmo.render();
