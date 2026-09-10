@@ -1,13 +1,26 @@
 <script lang="ts">
-export let visible = false
-export let size = "2rem"
-export let color = "#4cafef"
-export let top = "0px"
-export let left = "0px"
+  interface Props {
+    visible: boolean;
+    size: string;
+    color?: string;
+    top: string;
+    left: string;
+  }
+
+  let {
+    visible = false,
+    size = "2rem",
+    color = "#4cafef",
+    top = "0px",
+    left = "0px",
+  }: Props = $props();
 </script>
 
 {#if visible}
-  <div class="spinner" style="--size:{size}; --color:{color}; top:{top}; left:{left}"></div>
+  <div
+    class="spinner"
+    style="--size:{size}; --color:{color}; top:{top}; left:{left}"
+  ></div>
 {/if}
 
 <style>
@@ -23,6 +36,8 @@ export let left = "0px"
   }
 
   @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>

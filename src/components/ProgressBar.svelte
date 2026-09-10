@@ -1,39 +1,39 @@
 <script lang="ts">
-import { fade } from "svelte/transition"
+  import { fade } from "svelte/transition";
 
-interface Props {
-  value?: number
-  visible?: boolean
-  top?: string
-  left?: string
-  barWidth?: string
-  barHeight?: string
-}
-
-let {
-  value = 0,
-  visible = false,
-  top = "0px",
-  left = "0px",
-  barWidth = "100%",
-  barHeight = "0.5rem",
-}: Props = $props()
-
-let fill = $state(0)
-
-$effect(() => {
-  if (visible) {
-    fill = value
-  } else {
-    fill = 0
+  interface Props {
+    value?: number;
+    visible?: boolean;
+    top?: string;
+    left?: string;
+    barWidth?: string;
+    barHeight?: string;
   }
-})
+
+  let {
+    value = 0,
+    visible = false,
+    top = "0px",
+    left = "0px",
+    barWidth = "100%",
+    barHeight = "0.5rem",
+  }: Props = $props();
+
+  let fill = $state(0);
+
+  $effect(() => {
+    if (visible) {
+      fill = value;
+    } else {
+      fill = 0;
+    }
+  });
 </script>
 
 {#if visible}
-  <div 
+  <div
     class="progress-container"
-    transition:fade 
+    transition:fade
     style="
       top: {top};
       left: {left};

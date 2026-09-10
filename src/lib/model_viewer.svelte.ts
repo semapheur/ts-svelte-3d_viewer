@@ -17,7 +17,6 @@ import {
 import { type GizmoOptions, ViewportGizmo } from "three-viewport-gizmo";
 import { generateVisibleEdgesSVG } from "./generate_svg";
 import { GeometryRepairer } from "./geometry_fix";
-import { SARShader, type SARParams, type Polarization } from "./sar";
 
 // missing function in three.js
 (THREE.Triangle as any).getUV = (
@@ -67,7 +66,6 @@ export class ModelViewer {
   #grid!: THREE.GridHelper;
   #globalSurface!: THREE.Mesh;
   #globalSurfaceMaterial!: THREE.MeshStandardMaterial;
-  #depthTarget!: THREE.WebGLRenderTarget;
   #gui: GUI | null = null;
 
   #boundingBoxHelper: THREE.BoxHelper | null = null;
@@ -107,6 +105,18 @@ export class ModelViewer {
 
   #resizeHandler = () => this.resize();
   #pathTracerControlListener = () => this.#pathTracer?.updateCamera();
+
+  get camera() {
+    return this.#camera;
+  }
+
+  get controls() {
+    return this.#controls;
+  }
+
+  get scene() {
+    return this.#scene;
+  }
 
   constructor(canvas: HTMLCanvasElement) {
     this.#canvas = canvas;

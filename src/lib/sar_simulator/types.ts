@@ -13,7 +13,7 @@ export type ImagingMode = "stripmap" | "spotlight";
 
 export interface SarParams {
   antennaSize_m: number;
-  chirpBandwith_Hz: number;
+  chirpBandwidth_Hz: number;
   centerFrequency_Hz: number;
   pulseRepetitionFrequency_Hz: number;
   polarization: PolarizationConfig;

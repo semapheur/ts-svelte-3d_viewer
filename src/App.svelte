@@ -1,18 +1,44 @@
 <script lang="ts">
-  import { ModelViewer } from "./lib/ModelViewer.svelte";
+  import { ModelViewer } from "./lib/model_viewer.svelte";
+  import { SarController } from "./lib/sar_simulator/controller.svelte";
   import ProgressBar from "./components/ProgressBar.svelte";
   import Spinner from "./components/Spinner.svelte";
+  import Window from "./components/Window.svelte";
+  import SarViewer from "./components/SarViewer.svelte";
 
   let resolutionScale = $state(1);
   let viewer = $state<ModelViewer | null>(null);
+  let sar = $state<SarController | null>(null);
+  let showSar = $state<boolean>(false);
+
+  $effect(() => {
+    if (sar) sar.enabled = showSar;
+  });
 
   function threeAttachment(node: HTMLCanvasElement) {
-    viewer = new ModelViewer(node);
-    setTimeout(() => {
-      if (viewer) viewer.init();
-    }, 10);
+    const _viewer = new ModelViewer(node);
+    viewer = _viewer;
+    let disposed = false;
+
+    (async () => {
+      await _viewer.init();
+      if (disposed) return;
+
+      sar = new SarController({
+        enabled: showSar,
+        camera: _viewer.camera,
+        controls: _viewer.controls,
+        scene: _viewer.scene,
+        settleDelay_ms: 350,
+        maxScatterers: 2500,
+      });
+    })();
 
     return () => {
+      disposed = true;
+      sar?.dispose();
+      sar = null;
+
       viewer?.dispose();
       viewer = null;
     };
@@ -22,6 +48,8 @@
     const input = event.target as HTMLInputElement;
     if (!input.files?.length || !viewer) return;
     await viewer.loadModelFromFile(input.files[0]);
+
+    sar?.runSimulation();
   }
 </script>
 
@@ -45,6 +73,7 @@
       </div>
       <button onclick={() => viewer?.exportSvg()}>SVG</button>
     </fieldset>
+    <button onclick={() => (showSar = !showSar)}>SAR</button>
   </header>
 
   {#if viewer}
@@ -65,6 +94,11 @@
   {/if}
 
   <canvas {@attach threeAttachment} class="viewer"></canvas>
+  {#if showSar && sar}
+    <Window bind:open={showSar} title="SAR image">
+      <SarViewer image={sar.image} busy={sar.busy} error={sar.error} />
+    </Window>
+  {/if}
 </div>
 
 <style>

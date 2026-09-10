@@ -82,7 +82,7 @@ function synthesiseRangeCompressed(
 ): { data: Float64Array; setup: FastTimeSetup } {
   const oversample = params.rangeOversample ?? 1.2;
   const { sampleRate, rangeBinSize, slantRangeResolution } =
-    deriveFastTimeConfig(params.chirpBandwith_Hz, oversample);
+    deriveFastTimeConfig(params.chirpBandwidth_Hz, oversample);
 
   const kernelHalfWidth = 6;
   const { rangeMin, rangeMax } = computeRangeWindow(
@@ -117,7 +117,7 @@ function synthesiseRangeCompressed(
     for (let si = 0; si < scatterers.length; si++) {
       const platform = geometry.samples[p];
       const scatterer = scatterers[si];
-      viewDir.copy(sc.position).sub(platform.position);
+      viewDir.copy(scatterer.position).sub(platform.position);
       const R = viewDir.length();
       if (R < 1e-6) continue;
       viewDir.multiplyScalar(1 / R);
@@ -154,7 +154,7 @@ function synthesiseRangeCompressed(
         const sampleOffsetSamples = sampleIdx - idxFloat;
         const twoWayTimeOffset =
           (sampleOffsetSamples * (2 * rangeBinSize)) / SPEED_OF_LIGHT;
-        const env = sinc(Math.PI * params.chirpBandwith_Hz * twoWayTimeOffset);
+        const env = sinc(Math.PI * params.chirpBandwidth_Hz * twoWayTimeOffset);
         const a = amplitude * env;
         const base = lineOffset + sampleIdx * 2;
         data[base] += a * cA;
