@@ -1,7 +1,6 @@
 import * as THREE from "three";
 import {
   SPEED_OF_LIGHT,
-  type Polarization,
   type PolarizationConfig,
   type SarImage,
   type SarParams,
@@ -72,7 +71,7 @@ function polarizationFactor(
     return 0.6 + 0.4 * (1 - tilt);
   }
 
-  return 0.05 * 0.35 * tilt;
+  return 0.05 + 0.35 * tilt;
 }
 
 function synthesiseRangeCompressed(
@@ -224,15 +223,15 @@ function backProjectImage(
   const azAxis = geometry.azimuthAxis;
   const center = geometry.sceneCenter;
 
-  const window = new Float64Array();
+  const window = new Float64Array(numPulses);
   for (let p = 0; p < numPulses; p++) {
     window[p] = hann(p, numPulses);
   }
 
   for (let row = 0; row < imageSize; row++) {
-    const az = (row - (imageSize - 1) / 2) * dAz;
+    const gr = (row - (imageSize - 1) / 2) * dGr;
     for (let col = 0; col < imageSize; col++) {
-      const gr = (col - (imageSize - 1) / 2) * dGr;
+      const az = (col - (imageSize - 1) / 2) * dAz;
 
       pixelPos
         .copy(center)
@@ -251,7 +250,7 @@ function backProjectImage(
         if (idx0 < 0 || idx0 + 1 >= setup.numRangeBins) continue;
         const frac = idxFloat - idx0;
 
-        const base0 = p * setup.numRangeBins * idx0 * 2;
+        const base0 = (p * setup.numRangeBins + idx0) * 2;
         const base1 = base0 + 2;
         const re = compressed[base0] * (1 - frac) + compressed[base1] * frac;
         const im =

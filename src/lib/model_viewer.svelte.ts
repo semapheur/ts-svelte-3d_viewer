@@ -541,7 +541,7 @@ export class ModelViewer {
         if (!this.#currentModel) return;
 
         this.#processMaterials(this.#currentModel);
-        await this.#normalizeAndAddModel(this.#currentModel);
+        await this.#addModel(this.#currentModel);
         this.#updateMaterials();
         this.#focusOnObject(this.#currentModel);
         this.#addBoundingBoxAndLabels(this.#currentModel);
@@ -689,11 +689,11 @@ export class ModelViewer {
     this.#controls.update();
   }
 
-  async #normalizeAndAddModel(model: THREE.Object3D) {
+  async #addModel(model: THREE.Object3D) {
     const box = new THREE.Box3().setFromObject(model);
     const size = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
-    if (maxDim > 0) model.scale.setScalar(1.0 / maxDim);
+    //const maxDim = Math.max(size.x, size.y, size.z);
+    //if (maxDim > 0) model.scale.setScalar(1.0 / maxDim);
     this.#scene.add(model);
 
     await this.#setPathTracerScene();
@@ -920,7 +920,7 @@ export class ModelViewer {
     const sprite = new THREE.Sprite(material);
 
     const aspect = canvas.width / canvas.height;
-    const baseScale = 0.1;
+    const baseScale = 1;
     sprite.scale.set(baseScale * aspect, baseScale, 1);
     return sprite;
   }

@@ -96,7 +96,12 @@
   <canvas {@attach threeAttachment} class="viewer"></canvas>
   {#if showSar && sar}
     <Window bind:open={showSar} title="SAR image">
-      <SarViewer image={sar.image} busy={sar.busy} error={sar.error} />
+      <SarViewer
+        params={sar.params}
+        image={sar.image}
+        busy={sar.busy}
+        error={sar.error}
+      />
     </Window>
   {/if}
 </div>

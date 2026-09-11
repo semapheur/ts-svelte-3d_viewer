@@ -34,7 +34,7 @@ export function buildSarPassGeometry(
     );
   }
 
-  const losDir = radiusVec.clone().negate().negate().normalize();
+  const losDir = radiusVec.clone().negate().normalize();
 
   const nadir = UP.clone().negate();
   const incidenceAngle_rad = Math.acos(
@@ -42,7 +42,7 @@ export function buildSarPassGeometry(
   );
 
   const horizontalRadius = radiusVec.clone().setY(0);
-  if (horizontalRadius.lengthSq() > 1e-8) {
+  if (horizontalRadius.lengthSq() < 1e-8) {
     // Looking straight down: fall back to world +X as an arbitrary azimuth axis
     horizontalRadius.set(1, 0, 0);
   }
