@@ -110,7 +110,7 @@
     grid-template-rows: auto 1fr;
     overflow: hidden;
     user-select: none;
-    background: var(--color-primary);
+    background: oklch(var(--color-primary));
   }
 
   .window-header {
@@ -118,7 +118,7 @@
     display: grid;
     grid-template-columns: 1fr auto;
     padding: 0 var(--size-md);
-    background: var(--color-primary);
+    background: oklch(var(--color-primary));
     color: oklch(var(--color-text));
   }
 

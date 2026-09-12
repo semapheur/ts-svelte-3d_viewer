@@ -26,7 +26,7 @@ export class SarController {
     antennaSize_m: 4,
     chirpBandwidth_Hz: 500e6,
     centerFrequency_Hz: 9e9,
-    pulseRepetitionFrequency_Hz: 1500,
+    pulseRepetition_Hz: 1500,
     polarization: { tx: "V", rx: "V" },
     mode: "stripmap",
     platformSpeed_mps: 120,
@@ -55,6 +55,10 @@ export class SarController {
     this.#enabled = options.enabled;
     this.#settleDelay_ms = options.settleDelay_ms ?? 350;
 
+    if (options.maxScatterers !== undefined) {
+      this.params.maxScatterers = options.maxScatterers;
+    }
+
     this.#worker = new Worker(new URL("./sar.worker.ts", import.meta.url), {
       type: "module",
     });
@@ -79,12 +83,13 @@ export class SarController {
         void this.params.antennaSize_m;
         void this.params.chirpBandwidth_Hz;
         void this.params.centerFrequency_Hz;
-        void this.params.pulseRepetitionFrequency_Hz;
+        void this.params.pulseRepetition_Hz;
         void this.params.polarization.tx;
         void this.params.polarization.rx;
         void this.params.mode;
         void this.params.platformSpeed_mps;
         void this.params.apertureDuration_s;
+        void this.params.maxScatterers;
 
         if (!this.#enabled) return;
 
@@ -148,7 +153,7 @@ export class SarController {
       mode: this.params.mode,
       platformSpeed: this.params.platformSpeed_mps,
       apertureDuration: this.params.apertureDuration_s,
-      pulseRepitionFrequency: this.params.pulseRepetitionFrequency_Hz,
+      pulseRepitionFrequency: this.params.pulseRepetition_Hz,
       centerFrequency: this.params.centerFrequency_Hz,
       maxPulses: this.params.maxPulses,
     });
@@ -157,7 +162,7 @@ export class SarController {
       this.#options.excludeNames ?? ["grid", "gizmo", "spotlight-helper"],
     );
     const scatterers = sampleScneeScatterers(this.#options.scene, {
-      maxScatterers: this.#options.maxScatterers ?? 2500,
+      maxScatterers: this.params.maxScatterers ?? 2500,
       excludeNames: exclude,
     });
 

@@ -120,11 +120,6 @@
     --padding-button: 0.4rem 0.8rem;
   }
 
-  :global(body) {
-    background: var(--color-bg);
-    color: var(--color-text);
-  }
-
   :global(fieldset) {
     border: 1px solid var(--color-border);
     border-radius: var(--border-radius);
@@ -152,13 +147,6 @@
     border-color: var(--color-border-hover);
   }
 
-  .header {
-    display: flex;
-    justify-content: start;
-    align-items: center;
-    padding: 0 0.2rem 0.2rem 0.2rem;
-  }
-
   .container {
     width: 100%;
     height: 100%;
@@ -166,6 +154,13 @@
     flex-direction: column;
     position: relative;
     background: var(--color-bg-container);
+  }
+
+  .header {
+    display: flex;
+    justify-content: start;
+    align-items: center;
+    padding: 0 0.2rem 0.2rem 0.2rem;
   }
 
   .viewer {

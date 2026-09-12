@@ -15,7 +15,7 @@ export interface SarParams {
   antennaSize_m: number;
   chirpBandwidth_Hz: number;
   centerFrequency_Hz: number;
-  pulseRepetitionFrequency_Hz: number;
+  pulseRepetition_Hz: number;
   polarization: PolarizationConfig;
   mode: ImagingMode;
   platformSpeed_mps: number;
@@ -24,6 +24,7 @@ export interface SarParams {
   rangeOversample?: number;
   maxPulses?: number;
   imageSize?: number;
+  maxScatterers?: number;
 }
 
 export interface Scatterer {

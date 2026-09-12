@@ -2,6 +2,12 @@
   import { untrack } from "svelte";
   import GUI from "lil-gui";
   import type { SarImage, SarParams } from "../lib/sar_simulator/types";
+  import {
+    SAR_TOOLTIPS,
+    createTooltipHost,
+    attachTooltip,
+    type TooltipState,
+  } from "../lib/sar_simulator/tooltips";
 
   interface Props {
     params: SarParams;
@@ -41,42 +47,145 @@
     //return () => {};
   }
 
+  function upperBandwith_MHz(centerfrequency_Hz: number) {
+    return (2 * centerfrequency_Hz) / 1e6;
+  }
+
   function sarGui(container: HTMLDivElement) {
     let gui: GUI;
+    let bandwidthController: any;
+    const uiState = {
+      centerFrequency_GHz: 0,
+      chirpBandwidth_MHz: 0,
+      pulseRepetition_kHz: 0,
+    };
 
+    const tooltipHost = createTooltipHost();
+    const tooltipState: TooltipState = { enabled: true };
+    const tooltipCleanups: (() => void)[] = [];
+
+    function withTooltip(controller: any, key: string) {
+      const markdown = SAR_TOOLTIPS[key];
+      if (markdown) {
+        tooltipCleanups.push(
+          attachTooltip(
+            controller.domElement,
+            markdown,
+            tooltipHost,
+            tooltipState,
+          ),
+        );
+      }
+
+      return controller;
+    }
     untrack(() => {
       gui = new GUI({ container, title: "SAR Parameters" });
 
+      gui
+        .add(tooltipState, "enabled")
+        .name("Tooltips")
+        .onChange((v: boolean) => {
+          if (!v) tooltipHost.hide();
+        });
+
       const radarFolder = gui.addFolder("Radar");
-      radarFolder
-        .add(params, "antennaSize_m", 0.5, 20, 0.1)
-        .name("Antenna size (m)");
-      radarFolder
-        .add(params, "chirpBandwidth_Hz", 10e6, 1e9, 1e6)
-        .name("Chirp bandwidth (Hz)");
-      radarFolder
-        .add(params, "centerFrequency_Hz", 1e9, 40e9, 1e8)
-        .name("Center frequency (Hz)");
-      radarFolder
-        .add(params, "pulseRepetitionFrequency_Hz", 100, 10000, 10)
-        .name("PRF (Hz)");
+
+      uiState.centerFrequency_GHz = params.centerFrequency_Hz / 1e9;
+      uiState.chirpBandwidth_MHz = params.chirpBandwidth_Hz / 1e6;
+      uiState.pulseRepetition_kHz = params.pulseRepetition_Hz / 1e3;
+
+      withTooltip(
+        radarFolder
+          .add(params, "antennaSize_m", 0.5, 20, 0.1)
+          .name("Antenna size (m)"),
+        "antennaSize_m",
+      );
+
+      withTooltip(
+        radarFolder
+          .add(uiState, "centerFrequency_GHz", 1, 18, 0.01)
+          .name("Center frequency (GHz)")
+          .onChange((ghz: number) => {
+            params.centerFrequency_Hz = ghz * 1e9;
+
+            const maxMHz = upperBandwith_MHz(params.centerFrequency_Hz);
+            bandwidthController.max(maxMHz);
+            if (uiState.chirpBandwidth_MHz > maxMHz) {
+              uiState.chirpBandwidth_MHz = maxMHz;
+              params.chirpBandwidth_Hz = maxMHz * 1e6;
+              bandwidthController.updateDisplay();
+            }
+          }),
+        "centerFrequency_GHz",
+      );
+
+      bandwidthController = withTooltip(
+        radarFolder
+          .add(uiState, "chirpBandwidth_MHz", 1, 1e9, 1)
+          .name("Chirp bandwidth (MHz)")
+          .onChange((mhz: number) => {
+            params.chirpBandwidth_Hz = mhz * 1e6;
+          }),
+        "chirpBandwidth_MHz",
+      );
+
+      withTooltip(
+        radarFolder
+          .add(uiState, "pulseRepetition_kHz", 1, 20, 0.1)
+          .name("PRF (kHz)")
+          .onChange((khz: number) => {
+            params.pulseRepetition_Hz = khz * 1e3;
+          }),
+        "pulseRepetition_kHz",
+      );
 
       const polFolder = gui.addFolder("Polarization");
-      polFolder.add(params.polarization, "tx", ["H", "V"]).name("Tx");
-      polFolder.add(params.polarization, "rx", ["H", "V"]).name("Rx");
+
+      withTooltip(
+        polFolder.add(params.polarization, "tx", ["H", "V"]).name("Tx"),
+        "polarizationTx",
+      );
+      withTooltip(
+        polFolder.add(params.polarization, "rx", ["H", "V"]).name("Rx"),
+        "polarizationRx",
+      );
 
       const acquisition = gui.addFolder("Acquisition");
-      acquisition.add(params, "mode", ["stripmap", "spotlight"]).name("Mode");
-      acquisition
-        .add(params, "platformSpeed_mps", 1, 500, 1)
-        .name("Platform speed (m/s)");
-      acquisition
-        .add(params, "apertureDuration_s", 0.05, 20, 0.05)
-        .name("Aperture duration (s)");
+      withTooltip(
+        acquisition.add(params, "mode", ["stripmap", "spotlight"]).name("Mode"),
+        "mode",
+      );
+      withTooltip(
+        acquisition
+          .add(params, "platformSpeed_mps", 1, 500, 1)
+          .name("Platform speed (m/s)"),
+        "platformSpeed_mps",
+      );
+      withTooltip(
+        acquisition
+          .add(params, "apertureDuration_s", 0.05, 20, 0.05)
+          .name("Aperture duration (s)"),
+        "apertureDuration_s",
+      );
 
-      const output = gui.addFolder("Output");
-      output.add(params, "maxPulses", 8, 1024, 8).name("Max pulses");
-      output.add(params, "imageSize", 64, 1024, 64).name("Image size (px)");
+      const outputFolder = gui.addFolder("Output");
+      withTooltip(
+        outputFolder.add(params, "maxPulses", 8, 1024, 8).name("Max pulses"),
+        "maxPulses",
+      );
+      withTooltip(
+        outputFolder
+          .add(params, "maxScatterers", 100, 10000, 100)
+          .name("Max scatterers"),
+        "maxScatterers",
+      );
+      withTooltip(
+        outputFolder
+          .add(params, "imageSize", 64, 1024, 64)
+          .name("Image size (px)"),
+        "imageSize",
+      );
     });
 
     return () => gui.destroy();
@@ -102,5 +211,18 @@
     height: 100%;
     image-rendering: pixelated;
     aspect-ratio: 1 / 1;
+  }
+
+  :global(.sar-tooltip) {
+    display: none;
+    position: fixed;
+    z-index: 1;
+    max-width: 20vw;
+    padding: 0 0.5rem;
+    background: oklch(var(--color-primary) / 0.5);
+    border-radius: 0.25rem;
+    backdrop-filter: blur(5px);
+    font-size: 0.75rem;
+    pointer-events: none;
   }
 </style>
