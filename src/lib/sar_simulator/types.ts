@@ -45,8 +45,17 @@ export interface SarPassGeometryData {
   groundRangeAxis: THREE.Vector3;
   azimuthAxis: THREE.Vector3;
   incidenceAngle_rad: number;
+  azimuthAngle_rad: number;
   slantRangeToCenter: number;
   wavelength_m: number;
+}
+
+export interface SarStats {
+  rangeResolution_m: number;
+  azimuthResolution_m: number;
+  slantRange_m: number;
+  azimuthAngle_rad: number;
+  lookAngle_rad: number;
 }
 
 export interface SarImage {
@@ -57,6 +66,7 @@ export interface SarImage {
   azimuthExtent_m: number;
   min_dB: number;
   max_dB: number;
+  stats: SarStats;
 }
 
 export interface SarGeometryTransfer {
@@ -69,6 +79,7 @@ export interface SarGeometryTransfer {
   groundRangeAxis: [number, number, number];
   azimuthAxis: [number, number, number];
   incidenceAngleRad: number;
+  azimuthAngleRad: number;
   slantRangeToCenter: number;
   wavelength: number;
 }

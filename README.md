@@ -1,1 +1,3 @@
-i want to make a synthetic aperture radar simulator wired into my svelte 5 app. The simulator should take in inputs as antenna size, chirp bandwith and center frequency (linear frequency modulation), pulse repetition frequency, linear polarization for transmission and reception, SAR imaging mode (strip map and spot light). The SAR pass geometry is set by the camera view in the three.js 3d viewer. the synthetic aperture is defined by parameters such as speed and duration. The simulator should generate a ground range detected SAR image in a separate viewer container, and the SAR image should update in real-time after a change in the orbit camera has settled. provide a comprehensive typescript code pipeline implementing a SAR simulator with true range/Doppler backscattering
+# File conversion
+
+A .ts script for converting .obj files to .glb is provided in `src\scripts\file_conversion.ts`.

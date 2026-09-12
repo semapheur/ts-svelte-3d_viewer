@@ -5,10 +5,16 @@
 
   --color-primary: 14.1% 0.005 285.823;
   --color-text: rgba(255, 255, 255, 0.87);
+  --text-shadow:
+      -1px -1px 0 oklch(var(--color-primary)),
+      1px -1px 0 oklch(var(--color-primary)),
+      -1px 1px 0 oklch(var(--color-primary)),
+      1px 1px 0 oklch(var(--color-primary)), -1px 0 0 oklch(var(--color-primary)),
+      1px 0 0 oklch(var(--color-primary)), 0 -1px 0 oklch(var(--color-primary)),
+      0 1px 0 oklch(var(--color-primary));
+
 
   color-scheme: light dark;
-  color: var(--color-text);
-  background-color: var(--color-primary);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;

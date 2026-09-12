@@ -31,7 +31,7 @@ $$\\rho_r = \\dfrac{c}{2B}$$
 Doubling the bandwidth halves the range resolution (finer detail). This is independent of center frequency, platform speed, or aperture time.
 `,
   pulseRepetition_kHz: `
-**PRF** sets the pulse spacing in slow time. It must satisfy a Nyquist-style condition on the Doppler bandwidth to avoid azimuth ambiguities:
+**Pulse repetition frequency (PRF)** sets the pulse spacing in slow time. It must satisfy a Nyquist-style condition on the Doppler bandwidth to avoid azimuth ambiguities:
 
 $$\\text{PRF} \\gtrsim B_{doppler}$$
 

@@ -41,6 +41,8 @@ export function buildSarPassGeometry(
     THREE.MathUtils.clamp(losDir.dot(nadir), -1, 1),
   );
 
+  const azimuthAngle_rad = Math.atan2(radiusVec.z, radiusVec.x);
+
   const horizontalRadius = radiusVec.clone().setY(0);
   if (horizontalRadius.lengthSq() < 1e-8) {
     // Looking straight down: fall back to world +X as an arbitrary azimuth axis
@@ -98,6 +100,7 @@ export function buildSarPassGeometry(
     groundRangeAxis,
     azimuthAxis,
     incidenceAngle_rad,
+    azimuthAngle_rad,
     slantRangeToCenter,
     wavelength_m,
   };
@@ -118,6 +121,7 @@ export function toTransferable(geo: SarPassGeometryData): SarGeometryTransfer {
     ],
     azimuthAxis: [geo.azimuthAxis.x, geo.azimuthAxis.y, geo.azimuthAxis.z],
     incidenceAngleRad: geo.incidenceAngle_rad,
+    azimuthAngleRad: geo.azimuthAngle_rad,
     slantRangeToCenter: geo.slantRangeToCenter,
     wavelength: geo.wavelength_m,
   };
@@ -134,6 +138,7 @@ export function fromTransferable(t: SarGeometryTransfer): SarPassGeometryData {
     groundRangeAxis: new THREE.Vector3(...t.groundRangeAxis),
     azimuthAxis: new THREE.Vector3(...t.azimuthAxis),
     incidenceAngle_rad: t.incidenceAngleRad,
+    azimuthAngle_rad: t.azimuthAngleRad,
     slantRangeToCenter: t.slantRangeToCenter,
     wavelength_m: t.wavelength,
   };

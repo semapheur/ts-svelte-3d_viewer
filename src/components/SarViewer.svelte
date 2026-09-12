@@ -18,6 +18,20 @@
 
   let { params, image, busy = false, error = null }: Props = $props();
 
+  let showStats = $state<boolean>(true);
+
+  function formatMeters(meters: number) {
+    if (meters < 1) {
+      return `${(meters * 100).toFixed(1)} cm`;
+    }
+
+    return `${meters.toFixed(2)} m`;
+  }
+
+  function formatDegrees(radians: number) {
+    return `${((radians * 180) / Math.PI).toFixed(1)}°`;
+  }
+
   function draw(canvas: HTMLCanvasElement, image: SarImage) {
     canvas.width = image.width;
     canvas.height = image.height;
@@ -89,6 +103,13 @@
           if (!v) tooltipHost.hide();
         });
 
+      gui
+        .add({ showStats }, "showStats")
+        .name("Metadata")
+        .onChange((v: boolean) => {
+          showStats = v;
+        });
+
       const radarFolder = gui.addFolder("Radar");
 
       uiState.centerFrequency_GHz = params.centerFrequency_Hz / 1e9;
@@ -122,7 +143,13 @@
 
       bandwidthController = withTooltip(
         radarFolder
-          .add(uiState, "chirpBandwidth_MHz", 1, 1e9, 1)
+          .add(
+            uiState,
+            "chirpBandwidth_MHz",
+            1,
+            upperBandwith_MHz(params.centerFrequency_Hz),
+            1,
+          )
           .name("Chirp bandwidth (MHz)")
           .onChange((mhz: number) => {
             params.chirpBandwidth_Hz = mhz * 1e6;
@@ -195,6 +222,35 @@
 <div class="sar-viewer">
   <div class="gui" {@attach sarGui}></div>
   <canvas {@attach sarCanvas}></canvas>
+  {#if showStats && image}
+    <div class="stats">
+      <div class="stats-row">
+        <span>Slant range:</span><span
+          >{formatMeters(image.stats.slantRange_m)}</span
+        >
+      </div>
+      <div class="stats-row">
+        <span>Azimuth angle:</span><span
+          >{formatDegrees(image.stats.azimuthAngle_rad)}</span
+        >
+      </div>
+      <div class="stats-row">
+        <span>Look angle:</span><span
+          >{formatDegrees(image.stats.lookAngle_rad)}</span
+        >
+      </div>
+      <div class="stats-row">
+        <span>Range resolution:</span><span
+          >{formatMeters(image.stats.rangeResolution_m)}</span
+        >
+      </div>
+      <div class="stats-row">
+        <span>Azimuth resolution:</span><span
+          >{formatMeters(image.stats.azimuthResolution_m)}</span
+        >
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -204,6 +260,21 @@
 
   .gui {
     position: absolute;
+  }
+
+  .stats {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    display: grid;
+    grid-template-columns: max-content max-content;
+    column-gap: 1rem;
+    color: oklch(var(--color-text));
+    text-shadow: var(--text-shadow);
+  }
+
+  .stats-row {
+    display: contents;
   }
 
   canvas {

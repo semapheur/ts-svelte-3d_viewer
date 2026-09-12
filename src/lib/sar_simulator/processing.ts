@@ -5,6 +5,7 @@ import {
   type SarImage,
   type SarParams,
   type SarPassGeometryData,
+  type SarStats,
   type Scatterer,
 } from "./types";
 import { deriveFastTimeConfig } from "./chirp";
@@ -186,7 +187,6 @@ function backProjectImage(
   compressed: Float64Array,
   setup: FastTimeSetup,
 ): SarImage {
-  const imageSize = params.imageSize ?? 128;
   const numPulses = geometry.samples.length;
   const wavelength = geometry.wavelength_m;
 
@@ -213,10 +213,48 @@ function backProjectImage(
     Math.min(footprintFromBeam, geometry.slantRangeToCenter),
   );
 
-  const dGr = groundRangeExtent_m / imageSize;
-  const dAz = azimuthExtent_m / imageSize;
+  const groundRangeResolution_m =
+    setup.slantRangeResolution /
+    Math.max(Math.sin(geometry.incidenceAngle_rad), 0.05);
 
-  const magnitudes = new Float32Array(imageSize * imageSize);
+  const syntheticApertureLength_m =
+    params.platformSpeed_mps * params.apertureDuration_s;
+  const azimuthResolution_m =
+    params.mode === "spotlight"
+      ? (wavelength * geometry.slantRangeToCenter) /
+        Math.max(2 * syntheticApertureLength_m, 1e-3)
+      : params.antennaSize_m / 2.0;
+
+  const maxImageDim = params.imageSize ?? 512;
+  const minImageDim = 512;
+
+  const height = Math.min(
+    Math.max(
+      Math.round(groundRangeExtent_m / Math.max(groundRangeResolution_m, 1e-6)),
+      minImageDim,
+    ),
+    maxImageDim,
+  );
+  const width = Math.min(
+    Math.max(
+      Math.round(azimuthExtent_m / Math.max(azimuthResolution_m, 1e-6)),
+      minImageDim,
+    ),
+    maxImageDim,
+  );
+
+  const dGr = groundRangeExtent_m / height;
+  const dAz = azimuthExtent_m / width;
+
+  const stats: SarStats = {
+    rangeResolution_m: groundRangeResolution_m,
+    azimuthResolution_m,
+    slantRange_m: geometry.slantRangeToCenter,
+    azimuthAngle_rad: geometry.azimuthAngle_rad,
+    lookAngle_rad: geometry.incidenceAngle_rad,
+  };
+
+  const magnitudes = new Float32Array(width * height);
 
   const pixelPos = new THREE.Vector3();
   const groundAxis = geometry.groundRangeAxis;
@@ -228,10 +266,10 @@ function backProjectImage(
     window[p] = hann(p, numPulses);
   }
 
-  for (let row = 0; row < imageSize; row++) {
-    const gr = (row - (imageSize - 1) / 2) * dGr;
-    for (let col = 0; col < imageSize; col++) {
-      const az = (col - (imageSize - 1) / 2) * dAz;
+  for (let row = 0; row < height; row++) {
+    const gr = (row - (height - 1) / 2) * dGr;
+    for (let col = 0; col < width; col++) {
+      const az = (col - (width - 1) / 2) * dAz;
 
       pixelPos
         .copy(center)
@@ -265,7 +303,7 @@ function backProjectImage(
         accIm += w * (re * sA + im * cA);
 
         const magnitude = Math.sqrt(accRe * accRe + accIm * accIm);
-        magnitudes[row * imageSize + col] = magnitude;
+        magnitudes[row * width + col] = magnitude;
       }
     }
   }
@@ -275,7 +313,7 @@ function backProjectImage(
     if (magnitudes[i] > maxMag) maxMag = magnitudes[i];
   }
 
-  const db = new Float32Array(imageSize * imageSize);
+  const db = new Float32Array(width * height);
   let min_dB = Infinity;
   let max_dB = -Infinity;
   const floor_dB = -40;
@@ -288,13 +326,14 @@ function backProjectImage(
   }
 
   return {
-    width: imageSize,
-    height: imageSize,
+    width,
+    height,
     data: db,
     groundRangeExtent_m,
     azimuthExtent_m,
     min_dB,
     max_dB,
+    stats,
   };
 }
 
