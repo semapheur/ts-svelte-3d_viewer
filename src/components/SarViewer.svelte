@@ -146,9 +146,9 @@
           .add(
             uiState,
             "chirpBandwidth_MHz",
-            1,
+            0,
             upperBandwith_MHz(params.centerFrequency_Hz),
-            1,
+            100,
           )
           .name("Chirp bandwidth (MHz)")
           .onChange((mhz: number) => {
