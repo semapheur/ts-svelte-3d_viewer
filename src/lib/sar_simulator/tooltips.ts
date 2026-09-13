@@ -51,6 +51,8 @@ $$\\rho_{az} \\approx \\dfrac{\\lambda R}{2 L_{sa}}$$
 
 Longer aperture time → longer $L_{sa}$ → finer azimuth resolution. This is the mechanism that lets spotlight mode beat the fixed $L/2$ limit of stripmap.
 `,
+  eccentricity: `
+Blends the flight path between *fully circular* (0, the default) — an orbit around the scene center — and *fully linear* (1) — a straight line through the camera's current position, along the same tangent direction the orbit has there.`,
   mode: `
 **Stripmap** keeps the antenna boresight fixed (broadside), so a target is only illuminated for as long as the real-aperture beam sweeps past it. Azimuth resolution is capped at $\\rho_{az} \\approx L/2$, independent of range or aperture duration.
 

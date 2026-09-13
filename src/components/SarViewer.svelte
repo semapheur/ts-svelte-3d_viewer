@@ -178,22 +178,30 @@
         "polarizationRx",
       );
 
-      const acquisition = gui.addFolder("Acquisition");
+      const acquisitionFolder = gui.addFolder("Acquisition");
       withTooltip(
-        acquisition.add(params, "mode", ["stripmap", "spotlight"]).name("Mode"),
+        acquisitionFolder
+          .add(params, "mode", ["stripmap", "spotlight"])
+          .name("Mode"),
         "mode",
       );
       withTooltip(
-        acquisition
+        acquisitionFolder
           .add(params, "platformSpeed_mps", 1, 500, 1)
           .name("Platform speed (m/s)"),
         "platformSpeed_mps",
       );
       withTooltip(
-        acquisition
+        acquisitionFolder
           .add(params, "apertureDuration_s", 0.05, 20, 0.05)
           .name("Aperture duration (s)"),
         "apertureDuration_s",
+      );
+      withTooltip(
+        acquisitionFolder
+          .add(params, "eccentricity", 0, 1, 0.01)
+          .name("Eccentricity"),
+        "eccentricity",
       );
 
       const outputFolder = gui.addFolder("Output");
@@ -247,6 +255,11 @@
       <div class="stats-row">
         <span>Azimuth resolution:</span><span
           >{formatMeters(image.stats.azimuthResolution_m)}</span
+        >
+      </div>
+      <div class="stats-row">
+        <span>Synthetic aperture:</span><span
+          >{formatMeters(image.stats.syntheticAperture_m)}</span
         >
       </div>
     </div>

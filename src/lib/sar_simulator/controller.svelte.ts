@@ -31,6 +31,7 @@ export class SarController {
     mode: "stripmap",
     platformSpeed_mps: 120,
     apertureDuration_s: 10.0,
+    eccentricity: 0,
     maxPulses: 256,
     imageSize: 512,
   });
@@ -90,6 +91,7 @@ export class SarController {
         void this.params.platformSpeed_mps;
         void this.params.apertureDuration_s;
         void this.params.maxScatterers;
+        void this.params.eccentricity;
 
         if (!this.#enabled) return;
 
@@ -156,6 +158,7 @@ export class SarController {
       pulseRepitionFrequency: this.params.pulseRepetition_Hz,
       centerFrequency: this.params.centerFrequency_Hz,
       maxPulses: this.params.maxPulses,
+      eccentricity: this.params.eccentricity,
     });
 
     const exclude = new Set(

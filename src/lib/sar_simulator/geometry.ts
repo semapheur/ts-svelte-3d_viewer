@@ -16,6 +16,11 @@ interface Options {
   pulseRepitionFrequency: number;
   centerFrequency: number;
   maxPulses?: number;
+  eccentricity?: number;
+}
+
+function lerpDirection(a: THREE.Vector3, b: THREE.Vector3, t: number) {
+  return a.clone().lerp(b, t).normalize();
 }
 
 export function buildSarPassGeometry(
@@ -67,8 +72,9 @@ export function buildSarPassGeometry(
     Math.min(options.maxPulses ?? 512, totalPulsesIdeal || 1),
   );
 
-  const dt = options.apertureDuration / numPulses;
+  const dt = options.apertureDuration / numPulses; // should this be 1 / options.pulseRepitionFrequency
 
+  const eccentricity = THREE.MathUtils.clamp(options.eccentricity ?? 0, 0, 1);
   const orbitRadius = radiusVec.length();
   const angularSpeed = options.platformSpeed / orbitRadius;
 
@@ -79,16 +85,41 @@ export function buildSarPassGeometry(
     const t = (i - (numPulses - 1) / 2) * dt;
     const theta = angularSpeed * t;
 
-    const pos = radiusVec.clone().applyAxisAngle(UP, theta).add(sceneCenter);
+    const posCircular = radiusVec
+      .clone()
+      .applyAxisAngle(UP, theta)
+      .add(sceneCenter);
 
+    let pos: THREE.Vector3;
     let boresight: THREE.Vector3;
-    if (options.mode === "spotlight") {
-      boresight = sceneCenter.clone().sub(pos).normalize();
+
+    if (eccentricity <= 0) {
+      pos = posCircular;
+      boresight =
+        options.mode === "spotlight"
+          ? sceneCenter.clone().sub(pos).normalize()
+          : (boresight = broadsideBoresight
+              .clone()
+              .applyAxisAngle(UP, theta)
+              .normalize());
     } else {
-      boresight = broadsideBoresight
+      const posLinear = platformPos0
         .clone()
-        .applyAxisAngle(UP, theta)
-        .normalize();
+        .addScaledVector(azimuthAxis, options.platformSpeed);
+      pos = posCircular.lerp(posLinear, eccentricity);
+
+      if (options.mode === "spotlight") {
+        boresight = sceneCenter.clone().sub(pos).normalize();
+      } else {
+        const boresightCircular = broadsideBoresight
+          .clone()
+          .applyAxisAngle(UP, theta);
+        boresight = lerpDirection(
+          boresightCircular,
+          broadsideBoresight,
+          eccentricity,
+        );
+      }
     }
 
     samples.push({ time: t, position: pos, boresight });

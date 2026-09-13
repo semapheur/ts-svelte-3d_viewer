@@ -25,6 +25,7 @@ export interface SarParams {
   maxPulses?: number;
   imageSize?: number;
   maxScatterers?: number;
+  eccentricity?: number;
 }
 
 export interface Scatterer {
@@ -56,6 +57,7 @@ export interface SarStats {
   slantRange_m: number;
   azimuthAngle_rad: number;
   lookAngle_rad: number;
+  syntheticAperture_m: number;
 }
 
 export interface SarImage {
