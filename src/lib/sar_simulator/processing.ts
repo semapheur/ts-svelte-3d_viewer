@@ -145,6 +145,7 @@ export function synthesiseRangeCompressed(
     wavelength / Math.max(params.antennaSize_m, 1e-3),
   );
   const gainCutoff_rad = 3 * beamwidth_rad;
+  const cosGainCutoff = Math.cos(gainCutoff_rad);
 
   const viewDir = new THREE.Vector3();
   const boresight = new THREE.Vector3();
@@ -162,8 +163,8 @@ export function synthesiseRangeCompressed(
       viewDir.multiplyScalar(1 / R);
 
       const cosAngle = THREE.MathUtils.clamp(boresight.dot(viewDir), -1, 1);
+      if (cosAngle < cosGainCutoff) continue;
       const angle = Math.acos(cosAngle);
-      if (angle > gainCutoff_rad) continue;
 
       const gain = antennaGain(angle, beamwidth_rad);
       if (gain < 1e-4) continue;

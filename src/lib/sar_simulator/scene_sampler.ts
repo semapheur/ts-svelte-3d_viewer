@@ -9,7 +9,7 @@ const _color = new THREE.Color();
 const tmpVec = new THREE.Vector3();
 const tmpNormal = new THREE.Vector3();
 
-export function sampleScneeScatterers(
+export function sampleSceneScatterers(
   scene: THREE.Object3D,
   options: SampleOptions = {},
 ): Scatterer[] {

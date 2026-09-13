@@ -86,9 +86,9 @@ export async function backProjectImage(
   const output = new Float32Array(width * height);
 
   const compressedAttribute = new StorageBufferAttribute(compressed, 2);
-  const platformAttribute = new StorageBufferAttribute(platformPositions, 2);
-  const windowAttribute = new StorageBufferAttribute(windowValues, 2);
-  const outputAttribute = new StorageBufferAttribute(output, 2);
+  const platformAttribute = new StorageBufferAttribute(platformPositions, 3);
+  const windowAttribute = new StorageBufferAttribute(windowValues, 1);
+  const outputAttribute = new StorageBufferAttribute(output, 1);
 
   const compressedBuffer = storage(
     compressedAttribute,
@@ -129,7 +129,7 @@ export async function backProjectImage(
     const col = int(idx).mod(int(uWidth));
 
     const gr = float(row).sub(uHalfHeightMinus1).mul(uDGr);
-    const az = float(row).sub(uHalfHeightMinus1).mul(uDAz);
+    const az = float(col).sub(uHalfWidthMinus1).mul(uDAz);
 
     const pixelPos = uCenter.add(uGroundAxis.mul(gr)).add(uAzAxis.mul(az));
 
@@ -169,7 +169,7 @@ export async function backProjectImage(
         const window = windowBuffer.element(pulseIndex);
 
         accRe.addAssign(window.mul(sumRe.mul(cA).sub(sumIm.mul(sA))));
-        accIm.addAssign(window.mul(sumRe.mul(sA).sub(sumIm.mul(cA))));
+        accIm.addAssign(window.mul(sumRe.mul(sA).add(sumIm.mul(cA))));
       });
     });
 

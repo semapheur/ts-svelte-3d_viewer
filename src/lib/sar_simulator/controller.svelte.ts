@@ -1,15 +1,24 @@
 import * as THREE from "three";
 import type { OrbitControls } from "three/examples/jsm/Addons.js";
-import type { SarParams, SarImage } from "./types";
+import type {
+  SarParams,
+  SarImage,
+  SarPassGeometryData,
+  Scatterer,
+} from "./types";
 import type { SarWorkerRequest, SarWorkerResponse } from "./sar.worker";
 import {
   buildSarPassGeometry,
   toTransferable as geometryToTransferable,
 } from "./geometry";
 import {
-  sampleScneeScatterers,
+  sampleSceneScatterers,
   toTransferable as scatterersToTransferable,
 } from "./scene_sampler";
+import {
+  isGpuSupported,
+  runSarProcessing as runSarProcessingGpu,
+} from "./backproject_gpu";
 
 export interface SarControllerOptions {
   enabled: boolean;
@@ -23,14 +32,14 @@ export interface SarControllerOptions {
 
 export class SarController {
   params = $state<SarParams>({
-    antennaSize_m: 4,
+    antennaSize_m: 1,
     chirpBandwidth_Hz: 500e6,
     centerFrequency_Hz: 9e9,
     pulseRepetition_Hz: 1500,
     polarization: { tx: "V", rx: "V" },
     mode: "stripmap",
-    platformSpeed_mps: 120,
-    apertureDuration_s: 10.0,
+    platformSpeed_mps: 20,
+    apertureDuration_s: 3.0,
     eccentricity: 0,
     maxPulses: 256,
     imageSize: 512,
@@ -50,6 +59,7 @@ export class SarController {
   #paramTimer: ReturnType<typeof setTimeout> | null = null;
   #onControlsChange = () => this.#scheduleSettle();
   #disposeEffect: (() => void) | null = null;
+  #gpuSupportedPromise: Promise<boolean>;
 
   constructor(options: SarControllerOptions) {
     this.#options = options;
@@ -76,6 +86,8 @@ export class SarController {
         this.#lastError = message.error ?? "Unknown SAR simulation error";
       }
     };
+
+    this.#gpuSupportedPromise = isGpuSupported();
 
     options.controls.addEventListener("change", this.#onControlsChange);
 
@@ -164,7 +176,7 @@ export class SarController {
     const exclude = new Set(
       this.#options.excludeNames ?? ["grid", "gizmo", "spotlight-helper"],
     );
-    const scatterers = sampleScneeScatterers(this.#options.scene, {
+    const scatterers = sampleSceneScatterers(this.#options.scene, {
       maxScatterers: this.params.maxScatterers ?? 2500,
       excludeNames: exclude,
     });
@@ -174,6 +186,54 @@ export class SarController {
     this.#busy = true;
     this.#lastError = null;
 
+    const paramsSnapshot = $state.snapshot(this.params);
+    void this.#dispatch(requestId, paramsSnapshot, geometry, scatterers);
+  }
+
+  #applyResult(
+    requestId: number,
+    image: SarImage | null,
+    error: string | null,
+  ) {
+    if (requestId !== this.#latestRequestId) return;
+
+    this.#busy = false;
+    if (image) {
+      this.#image = image;
+      this.#lastError = null;
+    } else {
+      this.#lastError = error ?? "Unknown SAR simulation error";
+    }
+  }
+
+  async #dispatch(
+    requestId: number,
+    params: SarParams,
+    geometry: SarPassGeometryData,
+    scatterers: Scatterer[],
+  ) {
+    const gpuSupported = await this.#gpuSupportedPromise;
+
+    if (gpuSupported) {
+      try {
+        const image = await runSarProcessingGpu(params, geometry, scatterers);
+        this.#applyResult(requestId, image, null);
+        return;
+      } catch (error) {
+        (console.warn("GPU backprojection failed, falling back to CPU worker"),
+          error);
+      }
+    }
+
+    this.#runOnWorker(requestId, params, geometry, scatterers);
+  }
+
+  #runOnWorker(
+    requestId: number,
+    params: SarParams,
+    geometry: SarPassGeometryData,
+    scatterers: Scatterer[],
+  ) {
     const request: SarWorkerRequest = {
       type: "simulate",
       requestId,
