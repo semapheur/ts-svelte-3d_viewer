@@ -1,19 +1,36 @@
 <script lang="ts">
-  import { type Snippet } from "svelte";
+  import { untrack, type Snippet } from "svelte";
   import CloseButton from "./CloseButton.svelte";
 
   interface Props {
     open: boolean;
     title: string;
     children: Snippet;
+    aspectRatio?: number;
+    initialWidth?: number;
+    initialHeight?: number;
   }
 
-  let { open = $bindable(), title, children }: Props = $props();
+  let {
+    open = $bindable(),
+    title,
+    children,
+    aspectRatio,
+    initialWidth = 320,
+    initialHeight = 200,
+  }: Props = $props();
+
+  const MIN_CONTENT_WIDTH = 180;
+  const MIN_CONTENT_HEIGHT = 120;
 
   const position = $state({ x: 200, y: 150 });
-  const size = $state({ width: 320, height: 200 });
+  const size = $state({
+    width: untrack(() => initialWidth),
+    height: untrack(() => initialHeight),
+  });
   let isDragging = $state<boolean>(false);
   let isResizing = $state<boolean>(false);
+  let headerHeight = $state<number>(0);
 
   let startMouse = { x: 0, y: 0 };
   let startPos = { x: 0, y: 0 };
@@ -21,6 +38,11 @@
 
   const clamp = (val: number, min: number, max: number) =>
     Math.max(min, Math.min(max, val));
+
+  $effect(() => {
+    if (aspectRatio === undefined || headerHeight === 0) return;
+    size.height = size.width / aspectRatio + headerHeight;
+  });
 
   function startDrag(e: PointerEvent) {
     isDragging = true;
@@ -64,8 +86,25 @@
   function onResize(e: PointerEvent) {
     if (!isResizing) return;
 
-    size.width = Math.max(180, startSize.width + (e.clientX - startMouse.x));
-    size.height = Math.max(120, startSize.height + (e.clientY - startMouse.y));
+    if (aspectRatio !== undefined) {
+      const dx = e.clientX - startMouse.x;
+      const dy = e.clientY - startMouse.y;
+      const drive = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
+
+      const newWidth = Math.max(MIN_CONTENT_WIDTH, startSize.width + drive);
+      size.width = newWidth;
+      size.height = newWidth / aspectRatio + headerHeight;
+      return;
+    }
+
+    size.width = Math.max(
+      MIN_CONTENT_WIDTH,
+      startSize.width + (e.clientX - startMouse.x),
+    );
+    size.height = Math.max(
+      MIN_CONTENT_HEIGHT,
+      startSize.height + (e.clientY - startMouse.y),
+    );
   }
 
   function stopResize() {
@@ -89,6 +128,7 @@
     role="dialog"
     tabindex="0"
     onpointerdown={startDrag}
+    bind:clientHeight={headerHeight}
   >
     <div class="header-title">{title}</div>
     <div class="header-buttons">

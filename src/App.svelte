@@ -95,7 +95,11 @@
 
   <canvas {@attach threeAttachment} class="viewer"></canvas>
   {#if showSar && sar}
-    <Window bind:open={showSar} title="SAR image">
+    <Window
+      bind:open={showSar}
+      title="SAR image"
+      aspectRatio={sar.image ? sar.image.width / sar.image.height : 1}
+    >
       <SarViewer
         params={sar.params}
         image={sar.image}
