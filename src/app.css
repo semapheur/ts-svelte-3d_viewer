@@ -4,7 +4,7 @@
   font-weight: 400;
 
   --color-primary: 14.1% 0.005 285.823;
-  --color-text: rgba(255, 255, 255, 0.87);
+  --color-text: 98.5% 0 none;
   --text-shadow:
       -1px -1px 0 oklch(var(--color-primary)),
       1px -1px 0 oklch(var(--color-primary)),
@@ -47,7 +47,7 @@ body {
   margin: 0;
   display: flex;
   place-items: center;
-  background-color: okhlc(var(--color-primary));
+  background-color: oklch(var(--color-primary));
   color: oklch(var(--color-text));
 }
 

@@ -93,7 +93,9 @@
     />
   {/if}
 
-  <canvas {@attach threeAttachment} class="viewer"></canvas>
+  <div class="viewer-wrap">
+    <canvas {@attach threeAttachment} class="viewer"></canvas>
+  </div>
   {#if showSar && sar}
     <Window
       bind:open={showSar}
@@ -114,7 +116,6 @@
   :global(:root) {
     --color-bg: #111;
     --color-bg-container: #222;
-    --color-text: #eee;
     --color-border: #555;
     --color-border-hover: #777;
     --color-bg-button: #333;
@@ -136,7 +137,7 @@
 
   :global(button) {
     background: var(--color-bg-button);
-    color: var(--color-text);
+    color: oklch(var(--color-text));
     border: 1px solid var(--color-border);
     border-radius: var(--border-radius);
     padding: var(--padding-button);
@@ -167,9 +168,18 @@
     padding: 0 0.2rem 0.2rem 0.2rem;
   }
 
-  .viewer {
-    flex-grow: 1;
+  .viewer-wrap {
+    flex: 1 1 0;
+    min-height: 0;
     position: relative;
+  }
+
+  .viewer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
   }
 
   .export {
@@ -196,6 +206,6 @@
     border: 1px solid var(--color-border);
     border-radius: var(--border-radius);
     padding: 0.2rem 0.6rem;
-    color: var(--color-text);
+    color: oklch(var(--color-text));
   }
 </style>
