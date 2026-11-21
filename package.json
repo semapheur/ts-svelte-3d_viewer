@@ -1,0 +1,39 @@
+{
+  "name": "ts-svelte-3d-viewer",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "@tsconfig/svelte": "^5.0.8",
+    "@types/adm-zip": "^0.5.8",
+    "@types/node": "^24.2.1",
+    "@types/three": "^0.185.4",
+    "adm-zip": "^0.6.0",
+    "obj2gltf": "^3.2.0",
+    "svelte": "^5.57.0",
+    "svelte-check": "^4.3.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vite-plugin-glsl": "^1.6.1",
+    "vite-plugin-singlefile": "^2.3.0"
+  },
+  "dependencies": {
+    "@gltf-transform/core": "^4.5.0",
+    "katex": "^0.18.7",
+    "lil-gui": "^0.21.0",
+    "marked": "^18.0.12",
+    "marked-katex-extension": "^5.1.12",
+    "three": "^0.185.1",
+    "three-gpu-pathtracer": "^0.0.24",
+    "three-mesh-bvh": "^0.9.14",
+    "three-svg-renderer": "^1.0.4",
+    "three-viewport-gizmo": "^2.2.0"
+  }
+}
