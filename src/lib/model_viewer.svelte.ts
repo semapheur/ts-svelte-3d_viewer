@@ -1,13 +1,13 @@
 import { GUI } from "lil-gui";
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
+import { WebGLRenderer } from "three";
+import { pass } from "three/tsl";
+import { sobel } from "three/addons/tsl/display/SobelOperatorNode.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
-import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
-import { SobelOperatorShader } from "three/addons/shaders/SobelOperatorShader.js";
-import { WebGLPathTracer } from "three-gpu-pathtracer";
-import { ParallelMeshBVHWorker } from "three-mesh-bvh/src/workers/ParallelMeshBVHWorker.js";
+import { RectAreaLightTexturesLib } from "three/addons/lights/RectAreaLightTexturesLib.js";
+import { WebGPUPathTracer } from "three-gpu-pathtracer/webgpu";
+import { ParallelMeshBVHWorker } from "three-mesh-bvh/worker";
 import {
   FillPass,
   SVGMesh,
@@ -39,6 +39,11 @@ import { GeometryRepairer } from "./geometry_fix";
   return target;
 };
 
+// `PostProcessing` was renamed to `RenderPipeline` in newer three.js releases.
+// Resolve whichever one this version exposes.
+const PipelineClass: new (renderer: THREE.WebGPURenderer) => any =
+  (THREE as any).RenderPipeline ?? (THREE as any).PostProcessing;
+
 const BACKGROUND_COLOR = "#222222";
 
 export class ModelViewer {
@@ -47,10 +52,11 @@ export class ModelViewer {
   loadingSpinner = $state<boolean>(false);
 
   #canvas: HTMLCanvasElement;
-  #renderer!: THREE.WebGLRenderer;
-  #pathTracer!: WebGLPathTracer;
-  #composer!: EffectComposer;
-  #sobelPass!: ShaderPass;
+  #renderer!: THREE.WebGPURenderer;
+  #gizmoRenderer!: WebGLRenderer;
+  #gizmoCanvas!: HTMLCanvasElement;
+  #pathTracer!: WebGPUPathTracer;
+  #pipeline: any;
   #scene!: THREE.Scene;
   #camera!: THREE.PerspectiveCamera | THREE.OrthographicCamera;
   #perspectiveCamera!: THREE.PerspectiveCamera;
@@ -71,7 +77,9 @@ export class ModelViewer {
   #boundingBoxHelper: THREE.BoxHelper | null = null;
   #dimensionLabels: THREE.Sprite[] = [];
 
-  #rafId = 0;
+  #initialized = false;
+  #disposed = false;
+  #pathTracerSceneDirty = true;
   #frustumSize = 5;
 
   #sceneParams = {
@@ -118,22 +126,40 @@ export class ModelViewer {
     return this.#scene;
   }
 
+  get #isPathTracing() {
+    return this.#viewParams.renderMode === "Path Tracer";
+  }
+
   constructor(canvas: HTMLCanvasElement) {
     this.#canvas = canvas;
   }
 
   async init() {
+    if (!("gpu" in navigator)) {
+      console.warn(
+        "WebGPU is not available in this browser. WebGPURenderer will fall back to its WebGL2 backend and the path tracer will not work.",
+      );
+    }
+
     const width = this.#canvas.clientWidth;
     const height = this.#canvas.clientHeight;
     const aspect = width / height;
     const pixelRatio = Math.min(window.devicePixelRatio, 2);
 
-    this.#renderer = new THREE.WebGLRenderer({
+    this.#renderer = new THREE.WebGPURenderer({
       canvas: this.#canvas,
       antialias: true,
+      trackTimestamp: true,
     });
-    this.#renderer.setSize(width, height, false);
+    // WebGPURenderer must be initialised asynchronously before use.
+    await this.#renderer.init();
+    if (this.#disposed) {
+      this.#renderer.dispose();
+      return;
+    }
+
     this.#renderer.setPixelRatio(pixelRatio);
+    this.#renderer.setSize(width, height, false);
     this.#renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.#renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.#renderer.toneMappingExposure = 1.0;
@@ -166,31 +192,97 @@ export class ModelViewer {
         : this.#orthographicCamera;
     this.#camera.position.set(2, 2, 2);
 
-    this.#setupComposer(width, height, pixelRatio);
+    this.#setupPipeline();
     this.#setupLights();
     this.#setupEnvironment();
 
-    this.#pathTracer = new WebGLPathTracer(this.#renderer);
-    this.#pathTracer.setBVHWorker(new ParallelMeshBVHWorker());
+    this.#pathTracer = new WebGPUPathTracer(this.#renderer);
+    // setBVHWorker expects a worker *constructor*; the tracer creates its own instances.
+    this.#pathTracer.setBVHWorker(ParallelMeshBVHWorker);
+    // Adaptive frame budget needs GPU timestamp queries, which not every device offers.
+    if (!(this.#renderer as any).backend?.trackTimestamp) {
+      this.#pathTracer.adaptiveFrameBudget = false;
+    }
 
     this.#controls = new OrbitControls(this.#camera, this.#renderer.domElement);
     this.#controls.enableDamping = true;
     this.#controls.dampingFactor = 0.07;
     this.#controls.screenSpacePanning = false;
 
-    const gizmoOptions: GizmoOptions = { placement: "bottom-right" };
-    this.#gizmo = new ViewportGizmo(this.#camera, this.#renderer, gizmoOptions);
-    this.#gizmo.attachControls(this.#controls);
+    this.#setupGizmo();
 
     this.#loader = new GLTFLoader();
 
     this.#setupGUI();
 
     window.addEventListener("resize", this.#resizeHandler);
-    this.#animate();
+    this.#initialized = true;
+    this.#renderer.setAnimationLoop(this.#animate);
+  }
+
+  /**
+   * ViewportGizmo draws with its own LineMaterial (a ShaderMaterial), which
+   * WebGPURenderer cannot compile. It gets its own transparent WebGL canvas,
+   * stacked on top of the main one.
+   */
+  #setupGizmo() {
+    this.#gizmoCanvas = document.createElement("canvas");
+    this.#gizmoCanvas.style.position = "absolute";
+    this.#gizmoCanvas.style.pointerEvents = "none";
+    this.#canvas.after(this.#gizmoCanvas);
+
+    this.#gizmoRenderer = new WebGLRenderer({
+      canvas: this.#gizmoCanvas,
+      alpha: true,
+      antialias: true,
+    });
+    this.#gizmoRenderer.setClearColor(0x000000, 0);
+    this.#syncGizmoCanvas();
+
+    const gizmoOptions: GizmoOptions = {
+      placement: "bottom-right",
+      container: this.#canvas.parentElement ?? document.body,
+    };
+    this.#gizmo = new ViewportGizmo(
+      this.#camera,
+      this.#gizmoRenderer,
+      gizmoOptions,
+    );
+    this.#gizmo.attachControls(this.#controls);
+  }
+
+  #syncGizmoCanvas() {
+    const { clientWidth: w, clientHeight: h } = this.#canvas;
+    this.#gizmoCanvas.style.left = `${this.#canvas.offsetLeft}px`;
+    this.#gizmoCanvas.style.top = `${this.#canvas.offsetTop}px`;
+    this.#gizmoCanvas.style.width = `${w}px`;
+    this.#gizmoCanvas.style.height = `${h}px`;
+    this.#gizmoRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.#gizmoRenderer.setSize(w, h, false);
+  }
+
+  /**
+   * EffectComposer does not work with WebGPURenderer. Post-processing is done
+   * with a node based pipeline instead. Toggling "Line Mode" swaps its output
+   * node between the plain scene pass and a Sobel edge filter of it.
+   */
+  #setupPipeline() {
+    this.#pipeline = new PipelineClass(this.#renderer);
+    this.#buildPipeline();
+  }
+
+  #buildPipeline() {
+    const scenePass = pass(this.#scene, this.#camera);
+    this.#pipeline.outputNode = this.#viewParams.lineMode
+      ? sobel(scenePass)
+      : scenePass;
+    this.#pipeline.needsUpdate = true;
   }
 
   #setupLights() {
+    // WebGPU needs the LTC lookup textures for RectAreaLight.
+    (THREE as any).RectAreaLightNode?.setLTC?.(RectAreaLightTexturesLib.init());
+
     this.#globalLight = new THREE.RectAreaLight(
       0xffffff,
       this.#sceneParams.globalLight,
@@ -221,7 +313,6 @@ export class ModelViewer {
     this.#spotLight.shadow.bias = 0.0001;
     this.#spotLight.shadow.normalBias = 0.05;
     this.#spotLight.shadow.radius = 10;
-    this.#spotLight.shadow.blurSamples = 16;
     this.#scene.add(this.#spotLight);
 
     this.#spotLightHelper = new THREE.SpotLightHelper(
@@ -252,19 +343,13 @@ export class ModelViewer {
     this.#scene.add(this.#globalSurface);
   }
 
-  #setupComposer(width: number, height: number, pixelRatio: number) {
-    this.#composer = new EffectComposer(this.#renderer);
-    this.#composer.setPixelRatio(pixelRatio);
-    this.#composer.setSize(width, height);
+  /** Only touch the path tracer when it is actually the active render mode. */
+  #ptUpdateLights() {
+    if (this.#isPathTracing) this.#pathTracer.updateLights();
+  }
 
-    const renderPass = new RenderPass(this.#scene, this.#camera);
-    this.#composer.addPass(renderPass);
-
-    this.#sobelPass = new ShaderPass(SobelOperatorShader);
-    this.#sobelPass.uniforms.resolution.value.x = width * pixelRatio;
-    this.#sobelPass.uniforms.resolution.value.y = height * pixelRatio;
-    this.#sobelPass.enabled = false;
-    this.#composer.addPass(this.#sobelPass);
+  #ptUpdateMaterials() {
+    if (this.#isPathTracing) this.#pathTracer.updateMaterials();
   }
 
   #setupGUI() {
@@ -276,7 +361,7 @@ export class ModelViewer {
       .name("Global Light")
       .onChange((value: number) => {
         this.#globalLight.intensity = value;
-        this.#pathTracer.updateLights();
+        this.#ptUpdateLights();
       });
 
     sceneFolder
@@ -315,14 +400,15 @@ export class ModelViewer {
         this.#grid.position.y = -0.01;
         this.#grid.visible = this.#sceneParams.showGrid;
         this.#scene.add(this.#grid);
+        this.#markPathTracerSceneDirty();
       });
 
     sceneFolder
       .add(this.#sceneParams, "showSurface")
       .name("Show Surface")
-      .onChange(async (value: boolean) => {
+      .onChange((value: boolean) => {
         this.#globalSurface.visible = value;
-        await this.#setPathTracerScene();
+        this.#markPathTracerSceneDirty();
       });
 
     sceneFolder
@@ -331,7 +417,7 @@ export class ModelViewer {
       .onChange((value: number) => {
         this.#globalSurfaceMaterial.roughness = value;
         this.#globalSurfaceMaterial.needsUpdate = true;
-        this.#pathTracer.updateMaterials();
+        this.#ptUpdateMaterials();
       });
 
     sceneFolder
@@ -340,7 +426,7 @@ export class ModelViewer {
       .onChange((value: number) => {
         this.#globalSurfaceMaterial.metalness = value;
         this.#globalSurfaceMaterial.needsUpdate = true;
-        this.#pathTracer.updateMaterials();
+        this.#ptUpdateMaterials();
       });
 
     const spotLightFolder = this.#gui.addFolder("Spot light");
@@ -349,13 +435,13 @@ export class ModelViewer {
       .name("Intensity")
       .onChange((value: number) => {
         this.#spotLight.intensity = value;
-        this.#pathTracer.updateLights();
+        this.#ptUpdateLights();
       });
 
     spotLightFolder
       .add(this.#spotLightParams, "distance", 0, 100, 1)
       .name("Distance")
-      .onChange((value: number) => this.#updateSpotLightSpherical());
+      .onChange(() => this.#updateSpotLightSpherical());
 
     spotLightFolder
       .add(this.#spotLightParams, "azimuth", 0, 360, 1)
@@ -378,18 +464,19 @@ export class ModelViewer {
     toolsFolder
       .add(this.#viewParams, "renderMode", ["Raster", "Path Tracer"])
       .name("Render Mode")
-      .onChange((mode: string) => {
+      .onChange(async (mode: string) => {
         if (mode === "Raster") {
           this.#controls.removeEventListener(
             "change",
             this.#pathTracerControlListener,
           );
         } else {
-          this.#pathTracer.reset();
           this.#controls.addEventListener(
             "change",
             this.#pathTracerControlListener,
           );
+          if (this.#pathTracerSceneDirty) await this.#setPathTracerScene();
+          this.#pathTracer.reset();
         }
       });
 
@@ -411,9 +498,7 @@ export class ModelViewer {
     toolsFolder
       .add(this.#viewParams, "lineMode")
       .name("Line Mode")
-      .onChange((value: boolean) => {
-        if (this.#sobelPass) this.#sobelPass.enabled = value;
-      });
+      .onChange(() => this.#buildPipeline());
 
     toolsFolder
       .add(this.#viewParams, "shadows")
@@ -442,7 +527,7 @@ export class ModelViewer {
     );
     this.#spotLight.position.setFromSpherical(spherical);
     this.#spotLightHelper.update();
-    this.#pathTracer.updateLights();
+    this.#ptUpdateLights();
   }
 
   async #switchCamera(mode: string) {
@@ -463,18 +548,20 @@ export class ModelViewer {
     this.#gizmo.camera = this.#camera;
     this.#gizmo.update();
 
-    if (this.#composer.passes.length > 0) {
-      const renderPass = this.#composer.passes[0] as RenderPass;
-      renderPass.camera = this.#camera;
-    }
+    // The scene pass holds a reference to the camera, so rebuild it.
+    this.#buildPipeline();
 
-    if (this.#pathTracer && this.#viewParams.renderMode === "Path Tracer") {
+    if (this.#isPathTracing) {
       this.#pathTracer.reset();
       await this.#setPathTracerScene();
+    } else {
+      this.#pathTracerSceneDirty = true;
     }
   }
 
   async resize() {
+    if (!this.#initialized) return;
+
     const width = this.#canvas.clientWidth;
     const height = this.#canvas.clientHeight;
     const aspect = width / height;
@@ -489,16 +576,14 @@ export class ModelViewer {
     }
 
     this.#camera.updateProjectionMatrix();
+    // The post-processing pipeline follows the renderer size automatically.
     this.#renderer.setSize(width, height, false);
-    this.#composer.setSize(width, height);
+    this.#syncGizmoCanvas();
 
-    if (this.#pathTracer) await this.#setPathTracerScene();
+    // Rebuilding the path tracer scene is expensive, so only do it when needed.
+    if (this.#isPathTracing) await this.#setPathTracerScene();
+    else this.#pathTracerSceneDirty = true;
 
-    if (this.#sobelPass) {
-      const pixelRatio = Math.min(window.devicePixelRatio, 2);
-      this.#sobelPass.uniforms.resolution.value.x = width * pixelRatio;
-      this.#sobelPass.uniforms.resolution.value.y = height * pixelRatio;
-    }
     this.#gizmo.update();
   }
 
@@ -507,11 +592,11 @@ export class ModelViewer {
     this.#updateLabelPositions();
     this.#updateGlobalSurfaceAndLight();
 
-    if (this.#viewParams.renderMode === "Raster" || this.#viewParams.lineMode) {
-      this.#composer.render();
-    } else if (this.#viewParams.renderMode === "Path Tracer") {
+    if (!this.#isPathTracing || this.#viewParams.lineMode) {
+      this.#pipeline.render();
+    } else {
       if (this.#pathTracer.isCompiling) {
-        this.#composer.render();
+        this.#pipeline.render();
         this.progress = this.#pathTracer.samples;
         this.loadingSpinner = true;
       } else {
@@ -521,7 +606,6 @@ export class ModelViewer {
     }
 
     this.#gizmo.render();
-    this.#rafId = requestAnimationFrame(this.#animate);
   };
 
   async loadModelFromFile(file: File) {
@@ -551,7 +635,7 @@ export class ModelViewer {
   }
 
   #processMaterials(object: THREE.Object3D) {
-    const maxAnisotropy = this.#renderer.capabilities.getMaxAnisotropy();
+    const maxAnisotropy = this.#renderer.getMaxAnisotropy();
     const allMeshes: THREE.Mesh[] = [];
 
     object.traverse((child) => {
@@ -590,9 +674,7 @@ export class ModelViewer {
           };
         }
 
-        if (this.#renderer.capabilities.isWebGL2) {
-          material.alphaToCoverage = true;
-        }
+        material.alphaToCoverage = true;
 
         [
           material.map,
@@ -690,13 +772,9 @@ export class ModelViewer {
   }
 
   async #addModel(model: THREE.Object3D) {
-    const box = new THREE.Box3().setFromObject(model);
-    const size = box.getSize(new THREE.Vector3());
-    //const maxDim = Math.max(size.x, size.y, size.z);
-    //if (maxDim > 0) model.scale.setScalar(1.0 / maxDim);
     this.#scene.add(model);
-
-    await this.#setPathTracerScene();
+    this.#markPathTracerSceneDirty();
+    if (this.#isPathTracing) await this.#setPathTracerScene();
   }
 
   #updateMaterials() {
@@ -716,16 +794,13 @@ export class ModelViewer {
         )
           return;
 
-        if (!material.userData.original) {
-          console.log(material.map);
-        }
         material.map = this.#viewParams.texturesEnabled
           ? material.userData.original.map || null
           : null;
         material.needsUpdate = true;
       });
     });
-    this.#pathTracer.updateMaterials();
+    this.#ptUpdateMaterials();
   }
 
   #updateLabelPositions() {
@@ -789,21 +864,15 @@ export class ModelViewer {
   #toggleXray(enabled: boolean) {
     if (!this.#currentModel) return;
 
-    //const internalKeywords = ["root", "roll", "bone"] // /x_root_\d+_0/
-
     this.#currentModel.traverse((child) => {
       if (!(child instanceof THREE.Mesh)) return;
 
-      if (child instanceof THREE.Mesh && child.material) {
+      if (child.material) {
         const materials = Array.isArray(child.material)
           ? child.material
           : [child.material];
 
         const isInternal = child.userData.isInterior as boolean;
-        //const isInternal = internalKeywords.some((keyword) =>
-        //  child.name.toLowerCase().includes(keyword),
-        //)
-        //const isInternal = child.name.toLowerCase().match(internalPattern) !== null
 
         materials.forEach((material: THREE.Material) => {
           if (!isInternal) return;
@@ -867,6 +936,7 @@ export class ModelViewer {
     });
 
     object.userData.bbox = { wLabel, hLabel, lLabel };
+    this.#markPathTracerSceneDirty();
   }
 
   #makeTextSprite(message: string): THREE.Sprite {
@@ -893,6 +963,7 @@ export class ModelViewer {
 
     context.scale(pixelRatio, pixelRatio);
 
+    context.font = `${fontSize}px Arial`;
     context.fillStyle = "white";
     context.strokeStyle = "black";
     context.lineWidth = 1;
@@ -942,130 +1013,142 @@ export class ModelViewer {
     });
   }
 
+  #markPathTracerSceneDirty() {
+    this.#pathTracerSceneDirty = true;
+  }
+
   async #setPathTracerScene() {
     this.loadingProgress = true;
     this.progress = 0;
-    await this.#pathTracer.setSceneAsync(this.#scene, this.#camera, {
-      onProgress: (v: number) => {
-        this.progress = v * 100;
-      },
-    });
-
-    this.progress = 100;
-    setTimeout(() => {
-      this.loadingProgress = false;
-      this.progress = 0;
-    }, 500);
+    try {
+      await this.#pathTracer.setSceneAsync(this.#scene, this.#camera, {
+        onProgress: (v: number) => {
+          this.progress = v * 100;
+        },
+      });
+      this.#pathTracerSceneDirty = false;
+      this.progress = 100;
+    } catch (error) {
+      console.error("Failed to build path tracer scene:", error);
+    } finally {
+      setTimeout(() => {
+        this.loadingProgress = false;
+        this.progress = 0;
+      }, 500);
+    }
   }
 
   async exportPng(resolutionScale: number | null) {
     if (!this.#currentModel || !resolutionScale) return;
     this.#gizmo.visible = false;
 
-    if (this.#viewParams.renderMode === "Path Tracer") {
-      this.#pathTracer.renderSample();
+    try {
+      if (this.#isPathTracing) {
+        this.#pathTracer.renderSample();
+        this.#downloadImage(
+          this.#renderer.domElement.toDataURL("image/png", 1.0),
+          "scene.png",
+        );
+        return;
+      }
+
+      const basePixelRatio = Math.min(window.devicePixelRatio, 2);
+      const clientWidth = this.#canvas.clientWidth;
+      const clientHeight = this.#canvas.clientHeight;
+      const needsUpdate = resolutionScale !== 1;
+
+      // Scale through the pixel ratio so the restore step is exact.
+      if (needsUpdate) {
+        this.#renderer.setPixelRatio(basePixelRatio * resolutionScale);
+        this.#renderer.setSize(clientWidth, clientHeight, false);
+      }
+
+      // Render and read back in the same task: a WebGPU canvas texture is
+      // only guaranteed to hold its content until the task ends.
+      this.#pipeline.render();
       this.#downloadImage(
         this.#renderer.domElement.toDataURL("image/png", 1.0),
         "scene.png",
       );
+
+      if (needsUpdate) {
+        this.#renderer.setPixelRatio(basePixelRatio);
+        this.#renderer.setSize(clientWidth, clientHeight, false);
+      }
+    } finally {
       this.#gizmo.visible = true;
-      return;
     }
-
-    const needsUpdate = resolutionScale !== 1;
-    const originalWidth = this.#renderer.domElement.width;
-    const originalHeight = this.#renderer.domElement.height;
-    const clientWidth = this.#canvas.clientWidth;
-    const clientHeight = this.#canvas.clientHeight;
-
-    if (needsUpdate) {
-      this.#renderer.setSize(
-        clientWidth * resolutionScale,
-        clientHeight * resolutionScale,
-        false,
-      );
-      this.#composer.setSize(
-        clientWidth * resolutionScale,
-        clientHeight * resolutionScale,
-      );
-    }
-
-    this.#composer.render();
-    this.#downloadImage(
-      this.#renderer.domElement.toDataURL("image/png", 1.0),
-      "scene.png",
-    );
-
-    if (needsUpdate) {
-      this.#renderer.setSize(originalWidth, originalHeight, false);
-      this.#composer.setSize(originalWidth, originalHeight);
-    }
-
-    this.#gizmo.visible = true;
   }
 
   async exportSvg() {
     if (!this.#currentModel) return;
     this.#gizmo.visible = false;
 
-    const viewBox = this.#boundingSvgSize(this.#currentModel);
-    let svg = "";
-
     try {
-      const repairer = new GeometryRepairer();
-      const modelCopy = this.#currentModel.clone(true);
-      const results = await repairer.repairGeometry(modelCopy, {
-        mergeTolerance: 1e-5,
-      });
+      const viewBox = this.#boundingSvgSize(this.#currentModel);
+      let svg = "";
 
-      if ((results.finalAnalysis.totalStats.totalIssues ?? 0) > 0) {
-        throw new Error(
-          "Model has issues preventing SVG export using 'three-svg-renderer'",
+      try {
+        const repairer = new GeometryRepairer();
+        const modelCopy = this.#currentModel.clone(true);
+        const results = await repairer.repairGeometry(modelCopy, {
+          mergeTolerance: 1e-5,
+        });
+
+        if ((results.finalAnalysis.totalStats.totalIssues ?? 0) > 0) {
+          throw new Error(
+            "Model has issues preventing SVG export using 'three-svg-renderer'",
+          );
+        }
+
+        const svgMeshes: SVGMesh[] = [];
+        modelCopy.traverse((child) => {
+          if (child instanceof THREE.Mesh) svgMeshes.push(new SVGMesh(child));
+        });
+
+        const svgRenderer = new SVGRenderer();
+        svgRenderer.addPass(new FillPass());
+        svgRenderer.addPass(
+          new VisibleChainPass({
+            defaultStyle: { color: "#000000", width: 1 },
+          }),
         );
+
+        const svgElement = await svgRenderer.generateSVG(
+          svgMeshes,
+          this.#camera,
+          {
+            w: viewBox.width,
+            h: viewBox.height,
+          },
+        );
+        svg = svgElement.svg();
+      } catch (error) {
+        console.warn("Reverting to fallback SVG renderer: ", error);
+        svg = await generateVisibleEdgesSVG(this.#scene, this.#camera, {
+          width: viewBox.width,
+          height: viewBox.height,
+          fullWidth: this.#canvas.clientWidth,
+          fullHeight: this.#canvas.clientHeight,
+          offsetX: viewBox.minX,
+          offsetY: viewBox.minY,
+          lineColor: "#000000",
+          lineWidth: 1,
+          edgeThreshold: 1,
+          depthTestSamples: 2,
+          depthBias: 1e-4,
+        });
       }
 
-      const svgMeshes: SVGMesh[] = [];
-      modelCopy.traverse((child) => {
-        if (child instanceof THREE.Mesh) svgMeshes.push(new SVGMesh(child));
-      });
+      if (!svg) throw new Error("Failed to generate SVG with both renderers");
 
-      const svgRenderer = new SVGRenderer();
-      svgRenderer.addPass(new FillPass());
-      svgRenderer.addPass(
-        new VisibleChainPass({ defaultStyle: { color: "#000000", width: 1 } }),
-      );
-
-      const svgElement = await svgRenderer.generateSVG(
-        svgMeshes,
-        this.#camera,
-        {
-          w: viewBox.width,
-          h: viewBox.height,
-        },
-      );
-      svg = svgElement.svg();
-    } catch (error) {
-      console.warn("Reverting to fallback SVG renderer: ", error);
-      svg = await generateVisibleEdgesSVG(this.#scene, this.#camera, {
-        width: viewBox.width,
-        height: viewBox.height,
-        fullWidth: this.#canvas.clientWidth,
-        fullHeight: this.#canvas.clientHeight,
-        offsetX: viewBox.minX,
-        offsetY: viewBox.minY,
-        lineColor: "#000000",
-        lineWidth: 1,
-        edgeThreshold: 1,
-        depthTestSamples: 2,
-        depthBias: 1e-4,
-      });
+      const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      this.#downloadImage(url, "scene.svg");
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } finally {
+      this.#gizmo.visible = true;
     }
-
-    if (!svg) throw new Error("Failed to generate SVG with both renderers");
-
-    const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
-    this.#downloadImage(URL.createObjectURL(blob), "scene.svg");
-    this.#gizmo.visible = true;
   }
 
   #boundingSvgSize(model: THREE.Object3D) {
@@ -1107,21 +1190,33 @@ export class ModelViewer {
   }
 
   dispose() {
-    if (this.#rafId) cancelAnimationFrame(this.#rafId);
+    this.#disposed = true;
     window.removeEventListener("resize", this.#resizeHandler);
+
+    if (this.#renderer) this.#renderer.setAnimationLoop(null);
 
     if (this.#gui) {
       this.#gui.destroy();
       this.#gui = null;
     }
+    if (this.#controls) {
+      this.#controls.removeEventListener(
+        "change",
+        this.#pathTracerControlListener,
+      );
+      this.#controls.dispose();
+    }
+    if (this.#gizmo) this.#gizmo.dispose();
+    if (this.#gizmoRenderer) this.#gizmoRenderer.dispose();
+    if (this.#gizmoCanvas) this.#gizmoCanvas.remove();
     if (this.#pathTracer && typeof this.#pathTracer.dispose === "function") {
       this.#pathTracer.dispose();
     }
-    if (this.#renderer) {
-      this.#renderer.forceContextLoss();
-      this.#renderer.dispose();
+    if (this.#pipeline && typeof this.#pipeline.dispose === "function") {
+      this.#pipeline.dispose();
     }
-    if (this.#composer) this.#composer.dispose();
     if (this.#currentModel) this.#disposeModel(this.#currentModel);
+    // WebGPURenderer has no forceContextLoss(); dispose() releases its resources.
+    if (this.#renderer) this.#renderer.dispose();
   }
 }
