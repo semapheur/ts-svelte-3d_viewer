@@ -10,7 +10,7 @@ param(
   [string]$Path
 )
 
-#Set-ExecutionPolicy -Scope Process -ExecutionPolicy Unrestricted
+#Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 function Unzip-Files{
   param (

@@ -10,7 +10,7 @@ param(
   [string]$Path
 )
 
-#Set-ExecutionPolicy -Scope Process -ExecutionPolicy Unrestricted
+#Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 function DeExtend-Files{
   param (
@@ -47,7 +47,7 @@ function ReExtend-Files{
   param (
     [string]$RootPath
   )
-  
+
   if (-not (Test-Path -Path $RootPath -PathType Container)) {
     Write-Host "The specified path does not exist or is not a directory."
     exit
@@ -56,7 +56,7 @@ function ReExtend-Files{
   Get-ChildItem -Path $RootPath -Recurse -File | ForEach-Object {
     $fileName = $_.Name
     $isGz = ($_.Extension.Trim().ToLower() -eq ".gz")
-    
+
     $baseName = $isGz ? $_.BaseName : $fileName
 
     if ($baseName -match "^(.+)\.(.+)\.txt$") {

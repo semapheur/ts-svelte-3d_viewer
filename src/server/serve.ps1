@@ -1,9 +1,7 @@
 param(
-  [string]$Root = ".\dist",
+  [string]$Root = $PSScriptRoot,
   [int]$Port = 8080
 )
-
-$rootFull = (Resolve-Path $Root).Path.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
 
 function Get-AvailablePort($startPort) {
   $port = $startPort
@@ -35,58 +33,92 @@ function Get-ContentType($filePath) {
   }
 }
 
+$resolvedRoot = [IO.Path]::GetFullPath($Root)
+$sep = [IO.Path]::DirectorySeparatorChar
+$rootPrefix = $resolvedRoot.TrimEnd('\', '/') + $sep
+
+$Port = Get-AvailablePort -startPort $Port
 $url = "http://localhost:$Port/"
+
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add($url)
 
 try {
   $listener.Start()
-  Write-Host "Serving '$Root' at $url"
+  Write-Host "Serving '$resolvedRoot' at $url"
   Write-Host "Press Ctrl+C to stop server"
 
-  Start-Process $url
-} catch {
-  Write-Error "Failed to start listener"
-  pause
-  exit 1
-}
+  Start-Process $url | Out-Null
 
-while ($true) {
-  try {
-    $context = $listener.GetContext()
-    if (-not $context) { continue }
+  while ($listener.IsListening) {
+    $context = $null
+    try {
+      $context = $listener.GetContext()
+      if (-not $context) { continue }
 
-    $request = $context.Request
-    $response = $context.Response
-    $response.Headers.Add("Cross-Origin-Opener-Policy", "same-origin")
-    $response.Headers.Add("Cross-Origin-Embedder-Policy", "require-corp")
+      $request = $context.Request
+      $response = $context.Response
 
-    if (-not $request.Url) {
-      $response.StatusCode = 404
-      $response.OutputStream.Close()
-      continue
-    }
+      $response.Headers["Cross-Origin-Opener-Policy"] = "same-origin"
+      $response.Headers["Cross-Origin-Embedder-Policy"] = "require-corp"
 
-    $relativePath = $request.Url.LocalPath.TrimStart("/")
-    if ([string]::IsNullOrEmpty($relativePath)) {
-      $relativePath = "index.html"
-    }
+      if (-not $request.Url) {
+        $response.StatusCode = 400
+        continue
+      }
 
-    # Resolve to an absolute path, collapsing any ".." segments
-    $filePath = [IO.Path]::GetFullPath((Join-Path $rootFull $relativePath))
+      $relativePath = ($request.Url.LocalPath -replace '^[\\/]+', '') -replace '/', $sep
+      if ([string]::IsNullOrWhiteSpace($relativePath)) {
+        $relativePath = "index.html"
+      }
 
-    if (-not $filePath.StartsWith($rootFull, [StringComparison]::OrdinalIgnoreCase)) {
-      $response.StatusCode = 403
-    } elseif (Test-Path $filePath -PathType Leaf) {
-      $bytes = [System.IO.File]::ReadAllBytes($filePath)
-      $response.ContentType = Get-ContentType $filePath
+      $candidatePath = [IO.Path]::GetFullPath((Join-Path $rootPrefix $relativePath))
+
+      # Prevent directory traversal (including sibling folder prefix collisions)
+      if (-not $candidatePath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        $response.StatusCode = 403
+        continue
+      }
+
+      if (-not (Test-Path -LiteralPath $candidatePath -PathType Leaf)) {
+        $response.StatusCode = 404
+        continue
+      }
+
+      # Resolve symlinks/reparse points and re-verify boundary
+      $realPath = (Resolve-Path -LiteralPath $candidatePath).Path
+      if (-not $realPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        $response.StatusCode = 403
+        continue
+      }
+
+      $bytes = [System.IO.File]::ReadAllBytes($realPath)
+      $response.StatusCode = 200
+      $response.ContentType = Get-ContentType $realPath
       $response.ContentLength64 = $bytes.Length
       $response.OutputStream.Write($bytes, 0, $bytes.Length)
-    } else {
-      $response.StatusCode = 404
+    } catch [System.Net.HttpListenerException] {
+      if ($listener.IsListening) {
+        Write-Host "Listener error: $_"
+      }
+    } catch {
+      Write-Host "Error handling request: $_"
+      if ($context -and $context.Response) {
+        try { $context.Response.StatusCode = 500 } catch {}
+      }
+    } finally {
+      if ($context -and $context.Response) {
+        try { $context.Response.OutputStream.Close() } catch {}
+        try { $context.Response.Close() } catch {}
+      }
     }
-    $response.OutputStream.Close()
-  } catch {
-    Write-Host "Error handling request: $_"
+  }
+} catch {
+  Write-Error "Failed to start or run listener: $_"
+  exit 1
+} finally {
+  if ($listener) {
+    $listener.Stop()
+    $listener.Close()
   }
 }
